@@ -22,13 +22,21 @@ public class ModerationService {
     }
 
     public Moderation moderate(String text) {
-        // TODO(phase-3 M5): LLM first if configured; ANY exception -> rules with fallback=true (log a warning). No
-        // LLM -> rules with fallback=false.
-        throw new UnsupportedOperationException("TODO(phase-3 M5): ModerationService.moderate");
+        if (llm != null) {
+            try {
+                Verdict v = llm.classify(text);
+                return new Moderation(v.label(), v.confidence(), "llm", false, v.reason());
+            } catch (Exception e) { // any LLM failure -> graceful fallback
+                LOG.warn("LLM moderation failed, using rules: {}", e.toString());
+                Verdict v = rules.classify(text);
+                return new Moderation(v.label(), v.confidence(), "rules", true, v.reason());
+            }
+        }
+        Verdict v = rules.classify(text);
+        return new Moderation(v.label(), v.confidence(), "rules", false, v.reason());
     }
 
     public static boolean shouldHold(Moderation m) {
-        // TODO(phase-3 M5): label != ok AND confidence >= HOLD_THRESHOLD (0.7).
-        throw new UnsupportedOperationException("TODO(phase-3 M5): ModerationService.shouldHold");
+        return !"ok".equals(m.label()) && m.confidence() >= HOLD_THRESHOLD;
     }
 }

@@ -5,12 +5,15 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
+import org.aicancode.devblog.domain.DuplicateException;
 import org.aicancode.devblog.domain.Models.FeedQuery;
 import org.aicancode.devblog.domain.Models.Post;
 import org.aicancode.devblog.domain.Models.TagCount;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -62,41 +65,79 @@ public class JdbcPostRepository implements PostRepository {
 
     @Override
     public Post insertPost(Post post) {
-        // TODO(phase-3 M3): one transaction: INSERT the post (unique violation on slug -> DuplicateError), upsert
-        // the tags, link them, return the post read back with author name and tags.
-        throw new UnsupportedOperationException("TODO(phase-3 M3): JdbcPostRepository.insertPost");
+        try {
+            return tx.execute(status -> {
+                long id = jdbc.sql("INSERT INTO posts (slug, author_id, title, body, status, created_at, updated_at, "
+                                + "published_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id")
+                        .params(post.slug(), post.authorId(), post.title(), post.body(), post.status(),
+                                ts(post.createdAt()), ts(post.updatedAt()), ts(post.publishedAt()))
+                        .query(Long.class).single();
+                replaceTags(id, post.tags());
+                return byId(id).orElseThrow();
+            });
+        } catch (DuplicateKeyException e) {
+            throw new DuplicateException("slug");
+        }
     }
 
     @Override
     public Optional<Post> findPost(String slug) {
-        // TODO(phase-3 M3): by slug, not deleted, with author name and tags.
-        throw new UnsupportedOperationException("TODO(phase-3 M3): JdbcPostRepository.findPost");
+        return jdbc.sql(POST_SELECT + "WHERE p.slug = ? AND p.deleted_at IS NULL").param(slug)
+                .query(JdbcPostRepository::post).optional();
     }
 
     @Override
     public Optional<Post> updatePost(Post post, int expectedVersion) {
-        // TODO(phase-3 M3): UPDATE ... WHERE id = ? AND version = ? AND deleted_at IS NULL, version = version + 1;
-        // 0 rows -> null (conflict). Replace the tags in the same transaction.
-        throw new UnsupportedOperationException("TODO(phase-3 M3): JdbcPostRepository.updatePost");
+        return tx.execute(status -> {
+            // Optimistic locking: the WHERE clause only matches if nobody saved in between.
+            int rows = jdbc.sql("UPDATE posts SET title = ?, body = ?, status = ?, published_at = ?, updated_at = ?, "
+                            + "version = version + 1 WHERE id = ? AND version = ? AND deleted_at IS NULL")
+                    .params(post.title(), post.body(), post.status(), ts(post.publishedAt()), ts(post.updatedAt()),
+                            post.id(), expectedVersion)
+                    .update();
+            if (rows != 1) {
+                return Optional.<Post>empty();
+            }
+            replaceTags(post.id(), post.tags());
+            return byId(post.id());
+        });
     }
 
     @Override
     public void softDeletePost(long id, Instant at) {
-        // TODO(phase-3 M3): set deleted_at; never DELETE the row.
-        throw new UnsupportedOperationException("TODO(phase-3 M3): JdbcPostRepository.softDeletePost");
+        jdbc.sql("UPDATE posts SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL").params(ts(at), id).update();
     }
 
     @Override
     public List<Post> feed(FeedQuery query) {
-        // TODO(phase-3 M4): WHERE published AND not deleted [AND tag] [AND search_vector @@
-        // websearch_to_tsquery('english', q)] [AND (published_at, id) < (cursor)] ORDER BY published_at DESC, id
-        // DESC LIMIT n. Uses the index from V1.
-        throw new UnsupportedOperationException("TODO(phase-3 M4): JdbcPostRepository.feed");
+        List<String> where = new ArrayList<>(List.of("p.status = 'published'", "p.deleted_at IS NULL"));
+        List<Object> params = new ArrayList<>();
+        if (query.tag() != null) {
+            where.add("EXISTS (SELECT 1 FROM post_tags pt JOIN tags t ON t.id = pt.tag_id "
+                    + "WHERE pt.post_id = p.id AND t.name = ?)");
+            params.add(query.tag());
+        }
+        if (query.q() != null) {
+            where.add("p.search_vector @@ websearch_to_tsquery('english', ?)");
+            params.add(query.q());
+        }
+        if (query.after() != null) {
+            // Keyset pagination: "everything older than the last row I saw" - no OFFSET scan.
+            where.add("(p.published_at, p.id) < (?, ?)");
+            params.add(ts(query.after().publishedAt()));
+            params.add(query.after().id());
+        }
+        params.add(query.limit());
+        String sql = POST_SELECT + "WHERE " + String.join(" AND ", where)
+                + " ORDER BY p.published_at DESC, p.id DESC LIMIT ?";
+        return jdbc.sql(sql).params(params).query(JdbcPostRepository::post).list();
     }
 
     @Override
     public List<TagCount> tagCounts() {
-        // TODO(phase-3 M4): SELECT name, COUNT(*) over published, non-deleted posts GROUP BY name ORDER BY name.
-        throw new UnsupportedOperationException("TODO(phase-3 M4): JdbcPostRepository.tagCounts");
+        return jdbc.sql("SELECT t.name, COUNT(*) AS posts FROM tags t JOIN post_tags pt ON pt.tag_id = t.id "
+                        + "JOIN posts p ON p.id = pt.post_id WHERE p.status = 'published' AND p.deleted_at IS NULL "
+                        + "GROUP BY t.name ORDER BY COUNT(*) DESC, t.name")
+                .query((rs, row) -> new TagCount(rs.getString("name"), rs.getLong("posts"))).list();
     }
 }

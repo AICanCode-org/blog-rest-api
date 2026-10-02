@@ -20,8 +20,14 @@ public class SummaryService {
     }
 
     public Result summarize(String title, String body) {
-        // TODO(phase-3 M5): LLM if configured, ANY exception -> template with fallback=true (log a warning);
-        //   no LLM -> template with fallback=false.
-        throw new UnsupportedOperationException("TODO(phase-3 M5): SummaryService.summarize");
+        if (llm != null) {
+            try {
+                return new Result("llm", false, llm.summarize(title, body));
+            } catch (Exception e) { // any LLM failure -> graceful fallback
+                LOG.warn("LLM summary failed, using template: {}", e.toString());
+                return new Result("template", true, template.summarize(title, body));
+            }
+        }
+        return new Result("template", false, template.summarize(title, body));
     }
 }

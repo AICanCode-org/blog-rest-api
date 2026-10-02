@@ -2,6 +2,7 @@ package org.aicancode.devblog.repo;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -47,37 +48,43 @@ public class JdbcCommentRepository implements CommentRepository {
 
     @Override
     public Comment insertComment(Comment c) {
-        // TODO(phase-3 M5): INSERT with the moderation columns, read it back with author name and post slug.
-        throw new UnsupportedOperationException("TODO(phase-3 M5): JdbcCommentRepository.insertComment");
+        Moderation m = c.moderation();
+        long id = jdbc.sql("INSERT INTO comments (post_id, author_id, parent_id, body, status, moderation_label, "
+                        + "moderation_confidence, moderation_provider, moderation_fallback, moderation_reason, created_at) "
+                        + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id")
+                .params(c.postId(), c.authorId(), c.parentId(), c.body(), c.status(), m.label(), m.confidence(),
+                        m.provider(), m.fallback(), m.reason(), Timestamp.from(c.createdAt()))
+                .query(Long.class).single();
+        return findComment(id).orElseThrow();
     }
 
     @Override
     public Optional<Comment> findComment(long id) {
-        // TODO(phase-3 M5): by id, not deleted.
-        throw new UnsupportedOperationException("TODO(phase-3 M5): JdbcCommentRepository.findComment");
+        return query("WHERE c.id = ? AND c.deleted_at IS NULL", id).stream().findFirst();
     }
 
     @Override
     public List<Comment> visibleComments(long postId) {
-        // TODO(phase-3 M5): status 'visible', not deleted, ORDER BY created_at, id.
-        throw new UnsupportedOperationException("TODO(phase-3 M5): JdbcCommentRepository.visibleComments");
+        return query("WHERE c.post_id = ? AND c.status = 'visible' AND c.deleted_at IS NULL ORDER BY c.created_at, c.id",
+                postId);
     }
 
     @Override
     public List<Comment> commentsByStatus(String status) {
-        // TODO(phase-3 M5): by status, not deleted, post not deleted, ORDER BY created_at, id.
-        throw new UnsupportedOperationException("TODO(phase-3 M5): JdbcCommentRepository.commentsByStatus");
+        return query("WHERE c.status = ? AND c.deleted_at IS NULL AND p.deleted_at IS NULL ORDER BY c.created_at, c.id",
+                status);
     }
 
     @Override
     public Optional<Comment> setCommentStatus(long id, String status, long by, Instant at) {
-        // TODO(phase-3 M5): UPDATE status, moderated_by, moderated_at RETURNING; null if missing.
-        throw new UnsupportedOperationException("TODO(phase-3 M5): JdbcCommentRepository.setCommentStatus");
+        jdbc.sql("UPDATE comments SET status = ?, moderated_by = ?, moderated_at = ? WHERE id = ? AND deleted_at IS NULL")
+                .params(status, by, Timestamp.from(at), id).update();
+        return findComment(id);
     }
 
     @Override
     public void softDeleteComment(long id, Instant at) {
-        // TODO(phase-3 M5): set deleted_at.
-        throw new UnsupportedOperationException("TODO(phase-3 M5): JdbcCommentRepository.softDeleteComment");
+        jdbc.sql("UPDATE comments SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL").params(Timestamp.from(at), id)
+                .update();
     }
 }

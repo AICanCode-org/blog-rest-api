@@ -1,6 +1,8 @@
 package org.aicancode.devblog.ai;
 
+import java.util.Arrays;
 import java.util.regex.Pattern;
+import org.aicancode.devblog.domain.Text;
 
 /** The first two sentences of the post, at most 280 characters. Deterministic and offline. */
 public class TemplateSummarizer implements Summarizer {
@@ -10,8 +12,11 @@ public class TemplateSummarizer implements Summarizer {
 
     @Override
     public String summarize(String title, String body) {
-        // TODO(phase-3 M5): deterministic: the first two sentences of plain_text(body), at most 280
-        //   characters; an empty body -> the title. Exact cases: see the summary tests.
-        throw new UnsupportedOperationException("TODO(phase-3 M5): TemplateSummarizer.summarize");
+        String text = Text.plainText(body);
+        if (text.isEmpty()) {
+            return Text.shorten(title, SUMMARY_MAX);
+        }
+        String[] sentences = SENTENCE_END.split(text);
+        return Text.shorten(String.join(" ", Arrays.copyOf(sentences, Math.min(2, sentences.length))), SUMMARY_MAX);
     }
 }

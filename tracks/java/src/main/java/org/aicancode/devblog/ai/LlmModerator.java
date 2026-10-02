@@ -1,6 +1,8 @@
 package org.aicancode.devblog.ai;
 
+import java.util.Map;
 import java.util.Set;
+import org.aicancode.devblog.domain.Text;
 import tools.jackson.databind.json.JsonMapper;
 
 /** Asks the LLM, then validates its answer strictly. Anything unexpected throws, which triggers the fallback. */
@@ -21,16 +23,34 @@ public class LlmModerator implements Moderator {
 
     @Override
     public Verdict classify(String text) throws Exception {
-        // TODO(phase-3 M5): one POST {LLM_BASE_URL}/chat/completions (OpenAI-compatible, Bearer LLM_API_KEY
-        //   if set, LLM_TIMEOUT_MS) with a system prompt asking for JSON {label, confidence, reason}; return
-        //   parse_verdict(answer). Let errors propagate: ModerationService falls back.
-        throw new UnsupportedOperationException("TODO(phase-3 M5): LlmModerator.classify");
+        return parseVerdict(client.chat(PROMPT, "<comment>\n" + text + "\n</comment>", 60));
     }
 
     public static Verdict parseVerdict(String raw) {
-        // TODO(phase-3 M5): find the JSON object in the answer; label in ok/spam/toxic, confidence a number 0..1
-        // (round to 2 decimals), reason a string (collapse spaces, at most 200). Anything else -> throw (the caller
-        // falls back).
-        throw new UnsupportedOperationException("TODO(phase-3 M5): LlmModerator.parseVerdict");
+        int start = raw.indexOf('{');
+        int end = raw.lastIndexOf('}');
+        if (start < 0 || end < start) {
+            throw new IllegalArgumentException("no JSON object in LLM answer");
+        }
+        Map<?, ?> data;
+        try {
+            data = JSON.readValue(raw.substring(start, end + 1), Map.class);
+        } catch (RuntimeException e) {
+            throw new IllegalArgumentException("broken JSON in LLM answer", e);
+        }
+        Object label = data.get("label");
+        Object confidence = data.get("confidence");
+        Object reason = data.containsKey("reason") ? data.get("reason") : "";
+        if (!(label instanceof String l) || !LABELS.contains(l)) {
+            throw new IllegalArgumentException("unknown label " + label);
+        }
+        if (!(confidence instanceof Number n) || n.doubleValue() < 0 || n.doubleValue() > 1) {
+            throw new IllegalArgumentException("confidence out of range: " + confidence);
+        }
+        if (!(reason instanceof String r)) {
+            throw new IllegalArgumentException("reason must be a string");
+        }
+        String cleaned = Text.shorten(String.join(" ", r.strip().split("(?U)\\s+")).strip(), 200);
+        return new Verdict(l, Math.round(n.doubleValue() * 100) / 100.0, cleaned.isEmpty() ? "llm" : cleaned);
     }
 }

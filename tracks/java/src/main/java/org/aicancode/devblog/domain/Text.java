@@ -1,6 +1,12 @@
 package org.aicancode.devblog.domain;
 
+import java.nio.charset.StandardCharsets;
+import java.text.Normalizer;
 import java.time.Instant;
+import java.time.format.DateTimeParseException;
+import java.util.Base64;
+import java.util.Locale;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.aicancode.devblog.domain.Models.Cursor;
 
@@ -21,38 +27,51 @@ public final class Text {
 
     /** "Café & Code: Part 2!" -> "cafe-code-part-2". Empty results become "post". */
     public static String slugify(String title) {
-        // TODO(phase-3 M1): NFKD-normalise, drop non-ASCII, lower-case, runs of anything but [a-z0-9] -> one '-',
-        // trim '-', cut to 80 and trim '-' again; empty -> 'post'.
-        throw new UnsupportedOperationException("TODO(phase-3 M1): Text.slugify");
+        String ascii = Normalizer.normalize(title, Normalizer.Form.NFKD).replaceAll("[^\\x00-\\x7F]", "")
+                .toLowerCase(Locale.ROOT);
+        String slug = ascii.replaceAll("[^a-z0-9]+", "-").replaceAll("^-+|-+$", "");
+        slug = slug.substring(0, Math.min(slug.length(), SLUG_MAX)).replaceAll("-+$", "");
+        return slug.isEmpty() ? "post" : slug;
     }
 
     /** Drop the most common markdown symbols and collapse whitespace. */
     public static String plainText(String markdown) {
-        // TODO(phase-3 M1): drop the characters # * ` > and collapse whitespace (then trim). Used by excerpts and
-        // summaries.
-        throw new UnsupportedOperationException("TODO(phase-3 M1): Text.plainText");
+        return SPACES.matcher(MARKUP.matcher(markdown).replaceAll("")).replaceAll(" ").strip();
     }
 
     public static String shorten(String text, int maxLen) {
-        // TODO(phase-3 M1): at most `limit` characters (code points): if longer, cut to limit-3 (no trailing space)
-        // and add '...'.
-        throw new UnsupportedOperationException("TODO(phase-3 M1): Text.shorten");
+        if (text.codePointCount(0, text.length()) <= maxLen) {
+            return text;
+        }
+        int end = text.offsetByCodePoints(0, maxLen - 3);
+        return text.substring(0, end).stripTrailing() + "...";
     }
 
     public static String excerpt(String body) {
-        // TODO(phase-3 M1): shorten(plain_text(body), 160).
-        throw new UnsupportedOperationException("TODO(phase-3 M1): Text.excerpt");
+        return shorten(plainText(body), EXCERPT_MAX);
     }
 
     public static String encodeCursor(Instant publishedAt, long id) {
-        // TODO(phase-3 M1): base64url WITHOUT padding of 'YYYY-MM-DDTHH:MM:SS.sssZ|id' (milliseconds, UTC).
-        // ADR-0002.
-        throw new UnsupportedOperationException("TODO(phase-3 M1): Text.encodeCursor");
+        String raw = Times.iso(publishedAt) + "|" + id;
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(raw.getBytes(StandardCharsets.UTF_8));
     }
 
     public static Cursor decodeCursor(String cursor) {
-        // TODO(phase-3 M1): missing/empty -> null; anything that does not decode to exactly that format -> 400
-        // 'cursor is invalid'.
-        throw new UnsupportedOperationException("TODO(phase-3 M1): Text.decodeCursor");
+        if (cursor == null || cursor.isEmpty()) {
+            return null;
+        }
+        try {
+            if (!BASE64URL.matcher(cursor).matches()) {
+                throw new IllegalArgumentException(cursor);
+            }
+            String raw = new String(Base64.getUrlDecoder().decode(cursor), StandardCharsets.UTF_8);
+            Matcher m = CURSOR.matcher(raw);
+            if (!m.matches()) {
+                throw new IllegalArgumentException(raw);
+            }
+            return new Cursor(Instant.parse(m.group(1) + "Z"), Long.parseLong(m.group(2)));
+        } catch (IllegalArgumentException | DateTimeParseException e) {
+            throw ApiException.validation("cursor is invalid");
+        }
     }
 }

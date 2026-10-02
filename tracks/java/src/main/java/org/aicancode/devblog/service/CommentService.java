@@ -2,10 +2,15 @@ package org.aicancode.devblog.service;
 
 import java.time.Clock;
 import java.util.List;
+import java.util.Map;
 import org.aicancode.devblog.ai.ModerationService;
+import org.aicancode.devblog.domain.ApiException;
 import org.aicancode.devblog.domain.Models.Comment;
+import org.aicancode.devblog.domain.Models.Moderation;
 import org.aicancode.devblog.domain.Models.Post;
 import org.aicancode.devblog.domain.Models.Principal;
+import org.aicancode.devblog.domain.Times;
+import org.aicancode.devblog.domain.Validation;
 import org.aicancode.devblog.repo.CommentRepository;
 import org.aicancode.devblog.repo.PostRepository;
 
@@ -25,37 +30,50 @@ public class CommentService {
     }
 
     private Post publishedPost(String slug) {
-        // TODO(phase-3 M5): find the post by slug; missing, deleted or draft -> 404 not-found 'post'.
-        throw new UnsupportedOperationException("TODO(phase-3 M5): CommentService.publishedPost");
+        return posts.findPost(slug).filter(p -> "published".equals(p.status()))
+                .orElseThrow(() -> ApiException.notFound("post"));
     }
 
     public Comment create(Principal principal, String slug, Object payload) {
-        // TODO(phase-3 M5): validate body and parentId; the post must be PUBLISHED (404); a parent must be a
-        //   visible top-level comment of the same post (400); moderate the body and store it as 'held' when
-        //   should_hold, else 'visible'.
-        throw new UnsupportedOperationException("TODO(phase-3 M5): CommentService.create");
+        Map<String, Object> data = Validation.requireObject(payload);
+        String body = Validation.commentBody(data.get("body"));
+        Long parentId = Validation.parentId(data.get("parentId"));
+        Post post = publishedPost(slug);
+        if (parentId != null) {
+            Comment parent = comments.findComment(parentId).orElse(null);
+            if (parent == null || parent.postId() != post.id() || parent.parentId() != null
+                    || !"visible".equals(parent.status())) {
+                throw ApiException.validation("parentId must be a visible top-level comment of this post");
+            }
+        }
+        Moderation verdict = moderation.moderate(body);
+        String status = ModerationService.shouldHold(verdict) ? "held" : "visible";
+        return comments.insertComment(new Comment(0, post.id(), post.slug(), principal.userId(), "", parentId, body,
+                status, verdict, Times.now(clock), null, null));
     }
 
     public List<Comment> list(String slug) {
-        // TODO(phase-3 M5): visible comments of a PUBLISHED post (404 otherwise), oldest first.
-        throw new UnsupportedOperationException("TODO(phase-3 M5): CommentService.list");
+        return comments.visibleComments(publishedPost(slug).id());
     }
 
     public void delete(Principal principal, long commentId) {
-        // TODO(phase-3 M5): unknown comment -> 404; only its author or an ADMIN (403); SOFT delete
-        //   (deleted_at).
-        throw new UnsupportedOperationException("TODO(phase-3 M5): CommentService.delete");
+        Comment comment = comments.findComment(commentId).orElseThrow(() -> ApiException.notFound("comment"));
+        if (!(principal.isAdmin() || principal.userId() == comment.authorId())) {
+            throw ApiException.forbidden("only the author or an ADMIN can delete this comment");
+        }
+        comments.softDeleteComment(commentId, Times.now(clock));
     }
 
     public List<Comment> queue(Principal principal, String status) {
-        // TODO(phase-3 M5): ADMIN only; comments with the given status (default held), excluding comments of
-        // deleted posts.
-        throw new UnsupportedOperationException("TODO(phase-3 M5): CommentService.queue");
+        AuthService.requireRole(principal, "ADMIN");
+        return comments.commentsByStatus(Validation.commentStatus(status));
     }
 
     public Comment decide(Principal principal, long commentId, Object payload) {
-        // TODO(phase-3 M5): ADMIN only; approve -> visible, reject -> rejected; record moderated_by/at; keep the AI
-        // verdict; unknown id -> 404.
-        throw new UnsupportedOperationException("TODO(phase-3 M5): CommentService.decide");
+        AuthService.requireRole(principal, "ADMIN");
+        String decision = Validation.decision(Validation.requireObject(payload).get("decision"));
+        String status = "approve".equals(decision) ? "visible" : "rejected";
+        return comments.setCommentStatus(commentId, status, principal.userId(), Times.now(clock))
+                .orElseThrow(() -> ApiException.notFound("comment"));
     }
 }

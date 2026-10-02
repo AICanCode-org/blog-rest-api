@@ -18,12 +18,11 @@ public class PasswordHasher {
     }
 
     public String hash(String password) {
-        // TODO(phase-3 M2): bcrypt with the configured cost (salt included in the hash).
-        throw new UnsupportedOperationException("TODO(phase-3 M2): PasswordHasher.hash");
+        return encoder.encode(password);
     }
 
     public boolean verify(String password, String passwordHash) {
-        // TODO(phase-3 M2): bcrypt check; never throw on a malformed hash, return false.
-        throw new UnsupportedOperationException("TODO(phase-3 M2): PasswordHasher.verify");
+        boolean ok = encoder.matches(password, passwordHash == null ? dummy : passwordHash);
+        return ok && passwordHash != null;
     }
 }

@@ -1,7 +1,11 @@
 package org.aicancode.devblog.domain;
 
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.TreeSet;
 import java.util.regex.Pattern;
 
 /**
@@ -44,94 +48,164 @@ public final class Validation {
     }
 
     public static String email(Object value) {
-        // TODO(phase-3 M1): string, trimmed and lower-cased, at most 254 characters, must match EMAIL_RE. Exact
-        // messages: see the validation tests.
-        throw new UnsupportedOperationException("TODO(phase-3 M1): Validation.email");
+        if (!(value instanceof String s)) {
+            throw ApiException.validation("email is required");
+        }
+        String normalised = s.strip().toLowerCase(Locale.ROOT);
+        if (normalised.length() > 254 || !EMAIL.matcher(normalised).matches()) {
+            throw ApiException.validation("email must be a valid e-mail address");
+        }
+        return normalised;
     }
 
     public static String password(Object value) {
-        // TODO(phase-3 M1): string of at least 8 characters and at most 72 BYTES in UTF-8 (bcrypt ignores the
-        // rest). Do not trim.
-        throw new UnsupportedOperationException("TODO(phase-3 M1): Validation.password");
+        if (!(value instanceof String s) || chars(s) < 8 || s.getBytes(StandardCharsets.UTF_8).length > 72) {
+            throw ApiException.validation("password must be 8 characters to 72 bytes");
+        }
+        return s;
     }
 
     public static String displayName(Object value) {
-        // TODO(phase-3 M1): string, trimmed, 1..50 characters (code points, not UTF-16 units).
-        throw new UnsupportedOperationException("TODO(phase-3 M1): Validation.displayName");
+        if (!(value instanceof String s) || chars(s.strip()) < 1 || chars(s.strip()) > 50) {
+            throw ApiException.validation("displayName must be 1-50 characters");
+        }
+        return s.strip();
     }
 
     public static String role(Object value) {
-        // TODO(phase-3 M1): one of READER, AUTHOR, ADMIN (exact case).
-        throw new UnsupportedOperationException("TODO(phase-3 M1): Validation.role");
+        if (!(value instanceof String s) || !Models.ROLES.contains(s)) {
+            throw ApiException.validation("role must be one of READER, AUTHOR, ADMIN");
+        }
+        return s;
     }
 
     public static String title(Object value) {
-        // TODO(phase-3 M1): string, trimmed, 1..200 characters.
-        throw new UnsupportedOperationException("TODO(phase-3 M1): Validation.title");
+        if (!(value instanceof String s) || chars(s.strip()) < 1 || chars(s.strip()) > 200) {
+            throw ApiException.validation("title must be 1-200 characters");
+        }
+        return s.strip();
     }
 
     public static String body(Object value) {
-        // TODO(phase-3 M1): string, not blank, at most 50 000 characters. Stored as-is (Markdown): no trimming.
-        throw new UnsupportedOperationException("TODO(phase-3 M1): Validation.body");
+        if (!(value instanceof String s) || s.isBlank() || chars(s) > MAX_BODY) {
+            throw ApiException.validation("body must be 1-50000 characters");
+        }
+        return s;
     }
 
     public static List<String> tags(Object value) {
-        // TODO(phase-3 M1): missing/null -> []. A list of strings; trim + lower-case each, de-duplicate and
-        //   sort, then at most 5 and each must match TAG_RE with at most 30 characters.
-        throw new UnsupportedOperationException("TODO(phase-3 M1): Validation.tags");
+        if (value == null) {
+            return List.of();
+        }
+        if (!(value instanceof List<?> list) || !list.stream().allMatch(String.class::isInstance)) {
+            throw ApiException.validation("tags must be an array of strings");
+        }
+        TreeSet<String> cleaned = new TreeSet<>();
+        for (Object t : list) {
+            cleaned.add(((String) t).strip().toLowerCase(Locale.ROOT));
+        }
+        if (cleaned.size() > MAX_TAGS) {
+            throw ApiException.validation("at most 5 tags");
+        }
+        for (String t : cleaned) {
+            if (t.length() > 30 || !TAG.matcher(t).matches()) {
+                throw ApiException.validation("tags must be lower-case letters, digits and single hyphens (max 30)");
+            }
+        }
+        return new ArrayList<>(cleaned);
     }
 
     /** In a create a missing status means "draft"; in a PATCH (fallback null) an explicit null is an error. */
     public static String status(Object value, String fallback) {
-        // TODO(phase-3 M1): missing/null -> the default ('draft' on create); otherwise 'draft' or 'published'.
-        throw new UnsupportedOperationException("TODO(phase-3 M1): Validation.status");
+        if (value == null && fallback != null) {
+            return fallback;
+        }
+        if (!"draft".equals(value) && !"published".equals(value)) {
+            throw ApiException.validation("status must be draft or published");
+        }
+        return (String) value;
     }
 
     public static int version(Object value) {
-        // TODO(phase-3 M1): a positive integer (booleans are not integers!). Required on PATCH.
-        throw new UnsupportedOperationException("TODO(phase-3 M1): Validation.version");
+        Long v = positiveInt(value);
+        if (v == null || v > Integer.MAX_VALUE) {
+            throw ApiException.validation("version is required (the version you read)");
+        }
+        return v.intValue();
     }
 
     public static String commentBody(Object value) {
-        // TODO(phase-3 M1): string, trimmed, 1..2000 characters.
-        throw new UnsupportedOperationException("TODO(phase-3 M1): Validation.commentBody");
+        if (!(value instanceof String s) || chars(s.strip()) < 1 || chars(s.strip()) > MAX_COMMENT) {
+            throw ApiException.validation("body must be 1-2000 characters");
+        }
+        return s.strip();
     }
 
     public static Long parentId(Object value) {
-        // TODO(phase-3 M1): missing/null -> null; otherwise a positive integer.
-        throw new UnsupportedOperationException("TODO(phase-3 M1): Validation.parentId");
+        if (value == null) {
+            return null;
+        }
+        Long v = positiveInt(value);
+        if (v == null) {
+            throw ApiException.validation("parentId must be a positive integer");
+        }
+        return v;
     }
 
     public static int limit(String value) {
-        // TODO(phase-3 M1): query string: missing -> 10; ASCII digits only ([0-9]+: isdigit() also accepts other
-        // scripts), 1..50.
-        throw new UnsupportedOperationException("TODO(phase-3 M1): Validation.limit");
+        if (value == null) {
+            return DEFAULT_LIMIT;
+        }
+        if (!DIGITS.matcher(value).matches() || value.length() > 4 || Integer.parseInt(value) < 1
+                || Integer.parseInt(value) > MAX_LIMIT) {
+            throw ApiException.validation("limit must be an integer 1-50");
+        }
+        return Integer.parseInt(value);
     }
 
     public static String tagFilter(String value) {
-        // TODO(phase-3 M1): query string: missing/empty -> null; otherwise lower-cased and must match TAG_RE.
-        throw new UnsupportedOperationException("TODO(phase-3 M1): Validation.tagFilter");
+        if (value == null || value.isEmpty()) {
+            return null;
+        }
+        String t = value.strip().toLowerCase(Locale.ROOT);
+        if (t.length() > 30 || !TAG.matcher(t).matches()) {
+            throw ApiException.validation("tag must be lower-case letters, digits and single hyphens (max 30)");
+        }
+        return t;
     }
 
     public static String searchQuery(String value) {
-        // TODO(phase-3 M1): query string: trimmed; empty -> null; at most 100 characters.
-        throw new UnsupportedOperationException("TODO(phase-3 M1): Validation.searchQuery");
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        if (chars(value.strip()) > 100) {
+            throw ApiException.validation("q must be at most 100 characters");
+        }
+        return value.strip();
     }
 
     public static String commentStatus(String value) {
-        // TODO(phase-3 M1): query string: missing -> 'held'; otherwise held, visible or rejected.
-        throw new UnsupportedOperationException("TODO(phase-3 M1): Validation.commentStatus");
+        if (value == null) {
+            return "held";
+        }
+        if (!List.of("held", "visible", "rejected").contains(value)) {
+            throw ApiException.validation("status must be held, visible or rejected");
+        }
+        return value;
     }
 
     public static String decision(Object value) {
-        // TODO(phase-3 M1): 'approve' or 'reject'.
-        throw new UnsupportedOperationException("TODO(phase-3 M1): Validation.decision");
+        if (!"approve".equals(value) && !"reject".equals(value)) {
+            throw ApiException.validation("decision must be approve or reject");
+        }
+        return (String) value;
     }
 
     /** A non-numeric id in the URL cannot exist, so it is a 404 rather than a 400. */
     public static long pathId(String value, String what) {
-        // TODO(phase-3 M1): path segment: ASCII digits only (at most 18), otherwise a 404 not-found for `what`: an
-        // id that cannot exist is not a 400.
-        throw new UnsupportedOperationException("TODO(phase-3 M1): Validation.pathId");
+        if (value == null || !DIGITS.matcher(value).matches() || value.length() > 18) {
+            throw ApiException.notFound(what);
+        }
+        return Long.parseLong(value);
     }
 }

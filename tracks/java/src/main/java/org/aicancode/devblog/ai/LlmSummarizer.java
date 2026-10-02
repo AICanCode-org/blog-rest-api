@@ -1,5 +1,6 @@
 package org.aicancode.devblog.ai;
 
+import org.aicancode.devblog.domain.Text;
 
 /** Asks the LLM for a two-sentence TL;DR. The input is capped (cost) and the output is cleaned and capped. */
 public class LlmSummarizer implements Summarizer {
@@ -16,8 +17,12 @@ public class LlmSummarizer implements Summarizer {
 
     @Override
     public String summarize(String title, String body) throws Exception {
-        // TODO(phase-3 M5): cap the input at LLM_INPUT_MAX, one chat/completions call, clean the answer
-        //   (collapse spaces, at most 280); an empty answer is an error. Let errors propagate.
-        throw new UnsupportedOperationException("TODO(phase-3 M5): LlmSummarizer.summarize");
+        String capped = body.substring(0, Math.min(body.length(), LLM_INPUT_MAX));
+        String prompt = "<post>\nTitle: " + title + "\n\n" + capped + "\n</post>";
+        String text = String.join(" ", client.chat(PROMPT, prompt, 120).strip().split("(?U)\\s+")).strip();
+        if (text.isEmpty()) {
+            throw new IllegalStateException("empty summary");
+        }
+        return Text.shorten(text, TemplateSummarizer.SUMMARY_MAX);
     }
 }

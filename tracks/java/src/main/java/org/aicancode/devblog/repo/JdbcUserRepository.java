@@ -2,10 +2,13 @@ package org.aicancode.devblog.repo;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.Optional;
+import org.aicancode.devblog.domain.DuplicateException;
 import org.aicancode.devblog.domain.Models.RefreshToken;
 import org.aicancode.devblog.domain.Models.User;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
 /** PostgreSQL adapter for users and refresh tokens (plain SQL with JdbcClient, no ORM). */
@@ -19,9 +22,8 @@ public class JdbcUserRepository implements UserRepository {
     }
 
     static Instant instant(ResultSet rs, String column) throws SQLException {
-        // TODO(phase-3 M2): helper: convert a nullable java.sql.Timestamp column to an Instant (null stays
-        //   null).
-        throw new UnsupportedOperationException("TODO(phase-3 M2): JdbcUserRepository.instant");
+        Timestamp ts = rs.getTimestamp(column);
+        return ts == null ? null : ts.toInstant();
     }
 
     private static User user(ResultSet rs, int row) throws SQLException {
@@ -31,51 +33,60 @@ public class JdbcUserRepository implements UserRepository {
 
     @Override
     public User insertUser(String email, String passwordHash, String displayName, String role, Instant at) {
-        // TODO(phase-3 M2): INSERT ... RETURNING; unique violation on email -> DuplicateError.
-        throw new UnsupportedOperationException("TODO(phase-3 M2): JdbcUserRepository.insertUser");
+        try {
+            return jdbc.sql("INSERT INTO users (email, password_hash, display_name, role, created_at) "
+                            + "VALUES (?, ?, ?, ?, ?) RETURNING " + COLS)
+                    .params(email, passwordHash, displayName, role, Timestamp.from(at))
+                    .query(JdbcUserRepository::user).single();
+        } catch (DuplicateKeyException e) {
+            throw new DuplicateException("email");
+        }
     }
 
     @Override
     public Optional<User> findUserByEmail(String email) {
-        // TODO(phase-3 M2): SELECT by email (already lower-cased).
-        throw new UnsupportedOperationException("TODO(phase-3 M2): JdbcUserRepository.findUserByEmail");
+        return jdbc.sql("SELECT " + COLS + " FROM users WHERE email = ?").param(email)
+                .query(JdbcUserRepository::user).optional();
     }
 
     @Override
     public Optional<User> findUser(long id) {
-        // TODO(phase-3 M2): SELECT by id.
-        throw new UnsupportedOperationException("TODO(phase-3 M2): JdbcUserRepository.findUser");
+        return jdbc.sql("SELECT " + COLS + " FROM users WHERE id = ?").param(id).query(JdbcUserRepository::user).optional();
     }
 
     @Override
     public Optional<User> updateRole(long id, String role) {
-        // TODO(phase-3 M2): UPDATE ... RETURNING; null when the user does not exist.
-        throw new UnsupportedOperationException("TODO(phase-3 M2): JdbcUserRepository.updateRole");
+        return jdbc.sql("UPDATE users SET role = ? WHERE id = ? RETURNING " + COLS).params(role, id)
+                .query(JdbcUserRepository::user).optional();
     }
 
     @Override
     public void insertRefreshToken(long userId, String tokenHash, Instant at, Instant expiresAt) {
-        // TODO(phase-3 M2): store user id, token HASH, created_at, expires_at.
-        throw new UnsupportedOperationException("TODO(phase-3 M2): JdbcUserRepository.insertRefreshToken");
+        jdbc.sql("INSERT INTO refresh_tokens (user_id, token_hash, created_at, expires_at) VALUES (?, ?, ?, ?)")
+                .params(userId, tokenHash, Timestamp.from(at), Timestamp.from(expiresAt)).update();
     }
 
     @Override
     public Optional<RefreshToken> findRefreshToken(String tokenHash) {
-        // TODO(phase-3 M2): SELECT by token hash.
-        throw new UnsupportedOperationException("TODO(phase-3 M2): JdbcUserRepository.findRefreshToken");
+        return jdbc.sql("SELECT id, user_id, token_hash, created_at, expires_at, revoked_at FROM refresh_tokens "
+                        + "WHERE token_hash = ?").param(tokenHash)
+                .query((rs, row) -> new RefreshToken(rs.getLong("id"), rs.getLong("user_id"), rs.getString("token_hash"),
+                        instant(rs, "created_at"), instant(rs, "expires_at"), instant(rs, "revoked_at")))
+                .optional();
     }
 
     @Override
     public boolean revokeRefreshToken(long id, Instant at) {
-        // TODO(phase-3 M2): compare-and-set: UPDATE ... SET revoked_at WHERE id = ? AND revoked_at IS NULL; return
-        // true only if a row changed (this is what makes concurrent refreshes safe).
-        throw new UnsupportedOperationException("TODO(phase-3 M2): JdbcUserRepository.revokeRefreshToken");
+        // "AND revoked_at IS NULL" makes this a compare-and-set: of two concurrent refreshes with the
+        // same token, exactly one updates a row. The other is treated as reuse.
+        return jdbc.sql("UPDATE refresh_tokens SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL")
+                .params(Timestamp.from(at), id).update() == 1;
     }
 
     @Override
     public void revokeAllRefreshTokens(long userId, Instant at) {
-        // TODO(phase-3 M2): revoke every not-yet-revoked token of the user.
-        throw new UnsupportedOperationException("TODO(phase-3 M2): JdbcUserRepository.revokeAllRefreshTokens");
+        jdbc.sql("UPDATE refresh_tokens SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL")
+                .params(Timestamp.from(at), userId).update();
     }
 
     @Override

@@ -1,10 +1,27 @@
 package org.aicancode.devblog.security;
 
+import com.nimbusds.jose.JOSEException;
+import com.nimbusds.jose.JWSAlgorithm;
+import com.nimbusds.jose.JWSHeader;
+import com.nimbusds.jose.JWSVerifier;
+import com.nimbusds.jose.JOSEObjectType;
+import com.nimbusds.jose.crypto.MACSigner;
+import com.nimbusds.jose.crypto.MACVerifier;
+import com.nimbusds.jwt.JWTClaimsSet;
+import com.nimbusds.jwt.SignedJWT;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
+import java.text.ParseException;
 import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Base64;
+import java.util.Date;
+import java.util.HexFormat;
+import org.aicancode.devblog.domain.ApiException;
+import org.aicancode.devblog.domain.Models;
 import org.aicancode.devblog.domain.Models.Principal;
 import org.aicancode.devblog.domain.Models.User;
 import org.slf4j.Logger;
@@ -41,15 +58,49 @@ public class TokenService {
     }
 
     public String issueAccessToken(User user) {
-        // TODO(phase-3 M2): HS256 JWT with sub (user id as string), role, iss 'devblog', iat, exp = now + 900 s,
-        // using the injected clock.
-        throw new UnsupportedOperationException("TODO(phase-3 M2): TokenService.issueAccessToken");
+        long now = clock.instant().getEpochSecond();
+        JWTClaimsSet claims = new JWTClaimsSet.Builder()
+                .subject(Long.toString(user.id()))
+                .claim("role", user.role())
+                .issuer(ISSUER)
+                .issueTime(Date.from(Instant.ofEpochSecond(now)))
+                .expirationTime(Date.from(Instant.ofEpochSecond(now + ACCESS_TOKEN_TTL.toSeconds())))
+                .build();
+        SignedJWT jwt = new SignedJWT(new JWSHeader.Builder(JWSAlgorithm.HS256).type(JOSEObjectType.JWT).build(), claims);
+        try {
+            jwt.sign(new MACSigner(secret));
+        } catch (JOSEException e) {
+            throw new IllegalStateException("cannot sign token", e);
+        }
+        return jwt.serialize();
     }
 
     public Principal verifyAccessToken(String token) {
-        // TODO(phase-3 M2): pin the algorithm to HS256, check signature, iss and exp against the injected clock;
-        // any problem -> 401 unauthorized. Return Principal(user id, role).
-        throw new UnsupportedOperationException("TODO(phase-3 M2): TokenService.verifyAccessToken");
+        try {
+            SignedJWT jwt = SignedJWT.parse(token);
+            // Pin the algorithm: "alg": "none" (not even a SignedJWT) or RS256 tokens are rejected.
+            if (!JWSAlgorithm.HS256.equals(jwt.getHeader().getAlgorithm())) {
+                throw ApiException.unauthorized("invalid or expired token");
+            }
+            JWSVerifier verifier = new MACVerifier(secret);
+            if (!jwt.verify(verifier)) {
+                throw ApiException.unauthorized("invalid or expired token");
+            }
+            JWTClaimsSet claims = jwt.getJWTClaimsSet();
+            Date exp = claims.getExpirationTime();
+            String sub = claims.getSubject();
+            Object role = claims.getClaim("role");
+            // Expiry is checked against the injected clock, so tests can travel in time.
+            if (!ISSUER.equals(claims.getIssuer()) || exp == null || !exp.toInstant().isAfter(clock.instant())) {
+                throw ApiException.unauthorized("invalid or expired token");
+            }
+            if (sub == null || !sub.matches("[0-9]{1,18}") || !(role instanceof String r) || !Models.ROLES.contains(r)) {
+                throw ApiException.unauthorized("invalid or expired token");
+            }
+            return new Principal(Long.parseLong(sub), r);
+        } catch (ParseException | JOSEException | ClassCastException e) {
+            throw ApiException.unauthorized("invalid or expired token");
+        }
     }
 
     public static String randomToken(int bytes) {
@@ -60,13 +111,15 @@ public class TokenService {
 
     /** Returns a new opaque refresh token for the client (32 random bytes, URL-safe). */
     public static String newRefreshToken() {
-        // TODO(phase-3 M2): 32 random bytes from a CSPRNG, base64url without padding. Opaque: not a JWT.
-        throw new UnsupportedOperationException("TODO(phase-3 M2): TokenService.newRefreshToken");
+        return randomToken(32);
     }
 
     public static String hashRefreshToken(String token) {
-        // TODO(phase-3 M2): SHA-256 hex digest. Only the hash is stored (like a password, but fast is fine: it has
-        // 256 bits of entropy).
-        throw new UnsupportedOperationException("TODO(phase-3 M2): TokenService.hashRefreshToken");
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256").digest(token.getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(digest);
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
     }
 }

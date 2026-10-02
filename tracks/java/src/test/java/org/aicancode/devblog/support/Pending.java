@@ -14,20 +14,7 @@ import org.junit.jupiter.api.extension.ExtensionContext;
 public class Pending implements ExecutionCondition {
 
     /** Test class simple name -> milestone. */
-    static final Map<String, String> PENDING = Map.ofEntries(
-            Map.entry("ValidationTest", "Phase 3 M1 - validation"),
-            Map.entry("TextTest", "Phase 3 M1 - slugs, excerpts, cursors"),
-            Map.entry("SecurityTest", "Phase 3 M2 - passwords and tokens"),
-            Map.entry("AuthServiceTest", "Phase 3 M2 - AuthService"),
-            Map.entry("ApiAuthTest", "Phase 3 M2 - auth endpoints"),
-            Map.entry("PostServiceTest", "Phase 3 M3 - PostService"),
-            Map.entry("ApiPostsTest", "Phase 3 M3 - post endpoints"),
-            Map.entry("FeedTest", "Phase 3 M4 - feed, search, tags"),
-            Map.entry("ModerationTest", "Phase 3 M5 - AI moderation"),
-            Map.entry("SummaryTest", "Phase 3 M5 - AI summaries"),
-            Map.entry("CommentServiceTest", "Phase 3 M5 - CommentService"),
-            Map.entry("ApiCommentsTest", "Phase 3 M5 - comment endpoints"),
-            Map.entry("ApiIntegrationTest", "Phase 4 - integration tests"));
+    static final Map<String, String> PENDING = Map.of("ApiIntegrationTest", "Phase 4 - integration tests");
 
     @Override
     public ConditionEvaluationResult evaluateExecutionCondition(ExtensionContext context) {
