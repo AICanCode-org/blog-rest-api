@@ -48,3 +48,32 @@ Cursor, Claude, a local Ollama model, ...) produced something you kept, changed 
   tests pass, the rest are skipped as pending).
 * **Time saved / lost (honest guess):** saved ~10 min.
 * **What I learned:** make ports configurable from day one; it costs one line in Compose.
+
+### 2026-10-02 · Phase 3 · A test that called the code under test at import time
+* **Tool / model:** AI coding agent
+* **Prompt (summary):**
+  > The starter's text tests are pending, so why does collecting them fail with "TODO(phase-3 M1)" instead of reporting them as skipped?
+* **What it produced:** the diagnosis that one parametrised "bad cursor" case was built by calling
+  `encode_cursor(...)` at module level, so the stub ran while the test file was being *collected*,
+  before the pending marker could skip anything.
+* **What I kept / changed / rejected and why:** kept the diagnosis, and replaced the call with the
+  literal it produces (`MjAyNi0wMS0wMVQwMDowMDowMC4wMDBa`) in the Python and TypeScript suites.
+  Rejected the alternative of wrapping the import in `try/except`, which would hide real errors.
+* **How I verified it:** the starter collects cleanly (pending tests reported as skipped) and the
+  solution's text tests still pass (14 in Python, 14 in TypeScript).
+* **Time saved / lost (honest guess):** saved ~20 min.
+* **What I learned:** test data should be data. Anything computed at import time runs before your skip logic.
+
+### 2026-10-02 · Phase 3 · Reviewing the generated TODO hints
+* **Tool / model:** AI coding agent
+* **Prompt (summary):**
+  > Generate the starter stubs from the reference code, with a one-line hint per method, keyed by method name.
+* **What it produced:** stubs in all three tracks that compiled and kept the tests runnable.
+* **What I kept / changed / rejected and why:** a line-by-line review found hints attached to the wrong
+  method wherever two classes share a method name: `CommentService.create` got the hint for creating a
+  *post*, `Validation.tags` got the hint for *listing* tags, and the LLM moderator got the rule-based
+  moderator's hint. Fixed with class-qualified hints and a re-review of every stub.
+* **How I verified it:** listed every `TODO(phase-3 Mx)` with its hint and compared each with the tests
+  of that class; lint and the always-on tests pass in all three starters.
+* **Time saved / lost (honest guess):** generation saved hours; the review took 20 minutes and was essential.
+* **What I learned:** generated text keyed by a short name collides silently. Review the output, not the generator.
