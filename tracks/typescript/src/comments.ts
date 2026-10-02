@@ -1,8 +1,11 @@
 // Comments with AI moderation and a human moderation queue.
-import { type ModerationService } from "./ai.js";
+import { shouldHold, type ModerationService } from "./ai.js";
+import { requireRole } from "./auth.js";
 import type { Clock } from "./clock.js";
-import { type Comment, type Post, type Principal } from "./models.js";
+import { forbidden, notFound, validationError } from "./errors.js";
+import { isAdmin, type Comment, type Post, type Principal } from "./models.js";
 import type { CommentRepository, PostRepository } from "./repository.js";
+import * as v from "./validation.js";
 
 export class CommentService {
   constructor(
@@ -13,36 +16,67 @@ export class CommentService {
   ) {}
 
   private async publishedPost(slug: string): Promise<Post> {
-    // TODO(phase-3 M5): find the post by slug; missing, deleted or draft -> 404 not-found 'post'.
-    throw new Error("TODO(phase-3 M5): CommentService.publishedPost");
+    const post = await this.posts.findPost(slug);
+    if (!post || post.status !== "published") throw notFound("post");
+    return post;
   }
 
   async create(principal: Principal, slug: string, payload: unknown): Promise<Comment> {
-    // TODO(phase-3 M5): validate body and parentId; the post must be PUBLISHED (404); a parent must be a
-    //   visible top-level comment of the same post (400); moderate the body and store it as 'held' when
-    //   should_hold, else 'visible'.
-    throw new Error("TODO(phase-3 M5): CommentService.create");
+    const data = v.requireObject(payload);
+    const body = v.commentBody(data.body);
+    const parentId = v.parentId(data.parentId);
+    const post = await this.publishedPost(slug);
+    if (parentId !== null) {
+      const parent = await this.comments.findComment(parentId);
+      if (!parent || parent.postId !== post.id || parent.parentId !== null || parent.status !== "visible") {
+        throw validationError("parentId must be a visible top-level comment of this post");
+      }
+    }
+    const moderation = await this.moderation.moderate(body);
+    return this.comments.insertComment({
+      id: 0,
+      postId: post.id,
+      postSlug: post.slug,
+      authorId: principal.userId,
+      authorName: "",
+      parentId,
+      body,
+      status: shouldHold(moderation) ? "held" : "visible",
+      moderation,
+      createdAt: this.clock(),
+      moderatedBy: null,
+      moderatedAt: null,
+    });
   }
 
   async list(slug: string): Promise<Comment[]> {
-    // TODO(phase-3 M5): visible comments of a PUBLISHED post (404 otherwise), oldest first.
-    throw new Error("TODO(phase-3 M5): CommentService.list");
+    return this.comments.visibleComments((await this.publishedPost(slug)).id);
   }
 
   async delete(principal: Principal, commentId: number): Promise<void> {
-    // TODO(phase-3 M5): unknown comment -> 404; only its author or an ADMIN (403); SOFT delete (deleted_at).
-    throw new Error("TODO(phase-3 M5): CommentService.delete");
+    const comment = await this.comments.findComment(commentId);
+    if (!comment) throw notFound("comment");
+    if (!(isAdmin(principal) || principal.userId === comment.authorId)) {
+      throw forbidden("only the author or an ADMIN can delete this comment");
+    }
+    await this.comments.softDeleteComment(commentId, this.clock());
   }
 
   async queue(principal: Principal, status: string | undefined): Promise<Comment[]> {
-    // TODO(phase-3 M5): ADMIN only; comments with the given status (default held), excluding comments of
-    // deleted posts.
-    throw new Error("TODO(phase-3 M5): CommentService.queue");
+    requireRole(principal, "ADMIN");
+    return this.comments.commentsByStatus(v.commentStatus(status));
   }
 
   async decide(principal: Principal, commentId: number, payload: unknown): Promise<Comment> {
-    // TODO(phase-3 M5): ADMIN only; approve -> visible, reject -> rejected; record moderated_by/at; keep
-    // the AI verdict; unknown id -> 404.
-    throw new Error("TODO(phase-3 M5): CommentService.decide");
+    requireRole(principal, "ADMIN");
+    const decision = v.decision(v.requireObject(payload).decision);
+    const updated = await this.comments.setCommentStatus(
+      commentId,
+      decision === "approve" ? "visible" : "rejected",
+      principal.userId,
+      this.clock(),
+    );
+    if (!updated) throw notFound("comment");
+    return updated;
   }
 }

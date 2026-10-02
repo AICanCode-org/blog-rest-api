@@ -1,21 +1,20 @@
 // Input validation. Every function returns the normalised value or throws a 400 problem.
 // The limits are the ones in spec/requirements.md and spec/openapi.yaml; the Java and Python
 // tracks implement the same rules with the same messages.
-import { validationError } from "./errors.js";
-import { type CommentStatus, type PostStatus, type Role } from "./models.js";
+import { notFound, validationError } from "./errors.js";
+import { ROLES, type CommentStatus, type PostStatus, type Role } from "./models.js";
 
-export const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
-export const TAG_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
-export const DIGITS_RE = /^[0-9]+$/;
+const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+const TAG_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+const DIGITS_RE = /^[0-9]+$/;
 export const MAX_TAGS = 5;
 export const MAX_BODY = 50_000;
 export const MAX_COMMENT = 2_000;
 export const DEFAULT_LIMIT = 10;
 export const MAX_LIMIT = 50;
 
-export const isPositiveInt = (v: unknown): v is number =>
-  typeof v === "number" && Number.isSafeInteger(v) && v >= 1;
-export const utf8Bytes = (s: string) => Buffer.byteLength(s, "utf8");
+const isPositiveInt = (v: unknown): v is number => typeof v === "number" && Number.isSafeInteger(v) && v >= 1;
+const utf8Bytes = (s: string) => Buffer.byteLength(s, "utf8");
 
 export type Json = Record<string, unknown>;
 
@@ -27,96 +26,128 @@ export function requireObject(payload: unknown): Json {
 }
 
 export function email(value: unknown): string {
-  // TODO(phase-3 M1): string, trimmed and lower-cased, at most 254 characters, must match EMAIL_RE.
-  // Exact messages: see the validation tests.
-  throw new Error("TODO(phase-3 M1): email");
+  if (typeof value !== "string") throw validationError("email is required");
+  const normalised = value.trim().toLowerCase();
+  if (normalised.length > 254 || !EMAIL_RE.test(normalised)) {
+    throw validationError("email must be a valid e-mail address");
+  }
+  return normalised;
 }
 
 export function password(value: unknown): string {
-  // TODO(phase-3 M1): string of at least 8 characters and at most 72 BYTES in UTF-8 (bcrypt ignores the
-  // rest). Do not trim.
-  throw new Error("TODO(phase-3 M1): password");
+  // Length in characters (code points) for the minimum, bytes for the maximum: bcrypt reads 72 bytes.
+  if (typeof value !== "string" || [...value].length < 8 || utf8Bytes(value) > 72) {
+    throw validationError("password must be 8 characters to 72 bytes");
+  }
+  return value;
 }
 
-export const charLength = (s: string) => [...s].length;
+const charLength = (s: string) => [...s].length;
 
 export function displayName(value: unknown): string {
-  // TODO(phase-3 M1): string, trimmed, 1..50 characters (code points, not UTF-16 units).
-  throw new Error("TODO(phase-3 M1): displayName");
+  if (typeof value !== "string" || charLength(value.trim()) < 1 || charLength(value.trim()) > 50) {
+    throw validationError("displayName must be 1-50 characters");
+  }
+  return value.trim();
 }
 
 export function role(value: unknown): Role {
-  // TODO(phase-3 M1): one of READER, AUTHOR, ADMIN (exact case).
-  throw new Error("TODO(phase-3 M1): role");
+  if (!ROLES.includes(value as Role)) throw validationError("role must be one of READER, AUTHOR, ADMIN");
+  return value as Role;
 }
 
 export function title(value: unknown): string {
-  // TODO(phase-3 M1): string, trimmed, 1..200 characters.
-  throw new Error("TODO(phase-3 M1): title");
+  if (typeof value !== "string" || charLength(value.trim()) < 1 || charLength(value.trim()) > 200) {
+    throw validationError("title must be 1-200 characters");
+  }
+  return value.trim();
 }
 
 export function body(value: unknown): string {
-  // TODO(phase-3 M1): string, not blank, at most 50 000 characters. Stored as-is (Markdown): no
-  // trimming.
-  throw new Error("TODO(phase-3 M1): body");
+  if (typeof value !== "string" || !value.trim() || charLength(value) > MAX_BODY) {
+    throw validationError("body must be 1-50000 characters");
+  }
+  return value;
 }
 
 export function tags(value: unknown): string[] {
-  // TODO(phase-3 M1): missing/null -> []. A list of strings; trim + lower-case each, de-duplicate and sort,
-  //   then at most 5 and each must match TAG_RE with at most 30 characters.
-  throw new Error("TODO(phase-3 M1): tags");
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value) || !value.every((t) => typeof t === "string")) {
+    throw validationError("tags must be an array of strings");
+  }
+  const cleaned = [...new Set(value.map((t: string) => t.trim().toLowerCase()))].sort();
+  if (cleaned.length > MAX_TAGS) throw validationError("at most 5 tags");
+  for (const t of cleaned) {
+    if (t.length > 30 || !TAG_RE.test(t)) {
+      throw validationError("tags must be lower-case letters, digits and single hyphens (max 30)");
+    }
+  }
+  return cleaned;
 }
 
 /** In a create, a missing status means "draft". In a PATCH (`fallback` null), an explicit null is an error. */
 export function status(value: unknown, fallback: PostStatus | null = "draft"): PostStatus {
-  // TODO(phase-3 M1): missing/null -> the default ('draft' on create); otherwise 'draft' or 'published'.
-  throw new Error("TODO(phase-3 M1): status");
+  if ((value === undefined || value === null) && fallback !== null) return fallback;
+  if (value !== "draft" && value !== "published") throw validationError("status must be draft or published");
+  return value;
 }
 
 export function version(value: unknown): number {
-  // TODO(phase-3 M1): a positive integer (booleans are not integers!). Required on PATCH.
-  throw new Error("TODO(phase-3 M1): version");
+  if (!isPositiveInt(value)) throw validationError("version is required (the version you read)");
+  return value;
 }
 
 export function commentBody(value: unknown): string {
-  // TODO(phase-3 M1): string, trimmed, 1..2000 characters.
-  throw new Error("TODO(phase-3 M1): commentBody");
+  if (typeof value !== "string" || charLength(value.trim()) < 1 || charLength(value.trim()) > MAX_COMMENT) {
+    throw validationError("body must be 1-2000 characters");
+  }
+  return value.trim();
 }
 
 export function parentId(value: unknown): number | null {
-  // TODO(phase-3 M1): missing/null -> null; otherwise a positive integer.
-  throw new Error("TODO(phase-3 M1): parentId");
+  if (value === undefined || value === null) return null;
+  if (!isPositiveInt(value)) throw validationError("parentId must be a positive integer");
+  return value;
 }
 
 export function limit(value: string | undefined): number {
-  // TODO(phase-3 M1): query string: missing -> 10; ASCII digits only ([0-9]+: isdigit() also accepts
-  // other scripts), 1..50.
-  throw new Error("TODO(phase-3 M1): limit");
+  if (value === undefined) return DEFAULT_LIMIT;
+  if (!DIGITS_RE.test(value) || Number(value) < 1 || Number(value) > MAX_LIMIT) {
+    throw validationError("limit must be an integer 1-50");
+  }
+  return Number(value);
 }
 
 export function tagFilter(value: string | undefined): string | null {
-  // TODO(phase-3 M1): query string: missing/empty -> null; otherwise lower-cased and must match TAG_RE.
-  throw new Error("TODO(phase-3 M1): tagFilter");
+  if (value === undefined || value === "") return null;
+  const t = value.trim().toLowerCase();
+  if (t.length > 30 || !TAG_RE.test(t)) {
+    throw validationError("tag must be lower-case letters, digits and single hyphens (max 30)");
+  }
+  return t;
 }
 
 export function searchQuery(value: string | undefined): string | null {
-  // TODO(phase-3 M1): query string: trimmed; empty -> null; at most 100 characters.
-  throw new Error("TODO(phase-3 M1): searchQuery");
+  if (value === undefined || !value.trim()) return null;
+  if (charLength(value.trim()) > 100) throw validationError("q must be at most 100 characters");
+  return value.trim();
 }
 
 export function commentStatus(value: string | undefined): CommentStatus {
-  // TODO(phase-3 M1): query string: missing -> 'held'; otherwise held, visible or rejected.
-  throw new Error("TODO(phase-3 M1): commentStatus");
+  if (value === undefined) return "held";
+  if (value !== "held" && value !== "visible" && value !== "rejected") {
+    throw validationError("status must be held, visible or rejected");
+  }
+  return value;
 }
 
 export function decision(value: unknown): "approve" | "reject" {
-  // TODO(phase-3 M1): 'approve' or 'reject'.
-  throw new Error("TODO(phase-3 M1): decision");
+  if (value !== "approve" && value !== "reject") throw validationError("decision must be approve or reject");
+  return value;
 }
 
 /** A non-numeric id in the URL cannot exist, so it is a 404 rather than a 400. */
 export function pathId(value: string, what: string): number {
-  // TODO(phase-3 M1): path segment: ASCII digits only (at most 18), otherwise a 404 not-found for
-  // `what`: an id that cannot exist is not a 400.
-  throw new Error("TODO(phase-3 M1): pathId");
+  if (!DIGITS_RE.test(value) || value.length > 15) throw notFound(what);
+  return Number(value);
 }

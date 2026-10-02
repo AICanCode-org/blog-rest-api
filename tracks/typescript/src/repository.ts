@@ -18,11 +18,6 @@ import type {
   User,
 } from "./models.js";
 
-/** Starter helper: marks code you still have to write (returns `never`, so types still check). */
-const todo = (what: string): never => {
-  throw new Error(what);
-};
-
 // ---------------------------------------------------------------------------------------------
 // Ports
 // ---------------------------------------------------------------------------------------------
@@ -61,9 +56,9 @@ export interface CommentRepository {
 // PostgreSQL
 // ---------------------------------------------------------------------------------------------
 const UNIQUE_VIOLATION = "23505";
-export const isUniqueViolation = (err: unknown) => (err as { code?: string }).code === UNIQUE_VIOLATION;
+const isUniqueViolation = (err: unknown) => (err as { code?: string }).code === UNIQUE_VIOLATION;
 
-export const USER_COLS = "id, email, password_hash, display_name, role, created_at";
+const USER_COLS = "id, email, password_hash, display_name, role, created_at";
 const POST_SELECT = `
 SELECT p.id, p.slug, p.author_id, u.display_name AS author_name, p.title, p.body, p.status, p.version,
        p.created_at, p.updated_at, p.published_at,
@@ -83,7 +78,7 @@ type Row = Record<string, unknown>;
 const num = (v: unknown) => Number(v);
 const numOrNull = (v: unknown) => (v === null || v === undefined ? null : Number(v));
 
-export const toUser = (r: Row): User => ({
+const toUser = (r: Row): User => ({
   id: num(r.id),
   email: r.email as string,
   passwordHash: r.password_hash as string,
@@ -130,7 +125,7 @@ const toComment = (r: Row): Comment => ({
 
 type Queryable = Pick<pg.PoolClient, "query">;
 
-export async function replaceTags(db: Queryable, postId: number, tags: string[]): Promise<void> {
+async function replaceTags(db: Queryable, postId: number, tags: string[]): Promise<void> {
   await db.query("DELETE FROM post_tags WHERE post_id = $1", [postId]);
   if (tags.length) {
     await db.query("INSERT INTO tags (name) SELECT unnest($1::text[]) ON CONFLICT (name) DO NOTHING", [tags]);
@@ -141,10 +136,7 @@ export async function replaceTags(db: Queryable, postId: number, tags: string[])
   }
 }
 
-export async function inTransaction<T>(
-  pool: pg.Pool,
-  work: (client: pg.PoolClient) => Promise<T>,
-): Promise<T> {
+async function inTransaction<T>(pool: pg.Pool, work: (client: pg.PoolClient) => Promise<T>): Promise<T> {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -168,44 +160,71 @@ export class PgUserRepository implements UserRepository {
   }
 
   async insertUser(email: string, passwordHash: string, displayName: string, role: Role, at: Date) {
-    // TODO(phase-3 M2): INSERT ... RETURNING; unique violation on email -> DuplicateError.
-    return todo("TODO(phase-3 M2): PgUserRepository.insertUser");
+    try {
+      const row = await this.one(
+        `INSERT INTO users (email, password_hash, display_name, role, created_at) VALUES ($1, $2, $3, $4, $5) RETURNING ${USER_COLS}`,
+        [email, passwordHash, displayName, role, at],
+      );
+      return toUser(row!);
+    } catch (err) {
+      if (isUniqueViolation(err)) throw new DuplicateError("email");
+      throw err;
+    }
   }
 
   async findUserByEmail(email: string) {
-    // TODO(phase-3 M2): SELECT by email (already lower-cased).
-    return todo("TODO(phase-3 M2): PgUserRepository.findUserByEmail");
+    const row = await this.one(`SELECT ${USER_COLS} FROM users WHERE email = $1`, [email]);
+    return row ? toUser(row) : null;
   }
 
   async findUser(id: number) {
-    // TODO(phase-3 M2): SELECT by id.
-    return todo("TODO(phase-3 M2): PgUserRepository.findUser");
+    const row = await this.one(`SELECT ${USER_COLS} FROM users WHERE id = $1`, [id]);
+    return row ? toUser(row) : null;
   }
 
   async updateRole(id: number, role: Role) {
-    // TODO(phase-3 M2): UPDATE ... RETURNING; null when the user does not exist.
-    return todo("TODO(phase-3 M2): PgUserRepository.updateRole");
+    const row = await this.one(`UPDATE users SET role = $1 WHERE id = $2 RETURNING ${USER_COLS}`, [role, id]);
+    return row ? toUser(row) : null;
   }
 
   async insertRefreshToken(userId: number, tokenHash: string, at: Date, expiresAt: Date) {
-    // TODO(phase-3 M2): store user id, token HASH, created_at, expires_at.
-    return todo("TODO(phase-3 M2): PgUserRepository.insertRefreshToken");
+    await this.pool.query(
+      "INSERT INTO refresh_tokens (user_id, token_hash, created_at, expires_at) VALUES ($1, $2, $3, $4)",
+      [userId, tokenHash, at, expiresAt],
+    );
   }
 
   async findRefreshToken(tokenHash: string) {
-    // TODO(phase-3 M2): SELECT by token hash.
-    return todo("TODO(phase-3 M2): PgUserRepository.findRefreshToken");
+    const r = await this.one(
+      "SELECT id, user_id, token_hash, created_at, expires_at, revoked_at FROM refresh_tokens WHERE token_hash = $1",
+      [tokenHash],
+    );
+    if (!r) return null;
+    return {
+      id: num(r.id),
+      userId: num(r.user_id),
+      tokenHash: r.token_hash as string,
+      createdAt: r.created_at as Date,
+      expiresAt: r.expires_at as Date,
+      revokedAt: (r.revoked_at as Date | null) ?? null,
+    };
   }
 
   async revokeRefreshToken(id: number, at: Date) {
-    // TODO(phase-3 M2): compare-and-set: UPDATE ... SET revoked_at WHERE id = ? AND revoked_at IS NULL;
-    // return true only if a row changed (this is what makes concurrent refreshes safe).
-    return todo("TODO(phase-3 M2): PgUserRepository.revokeRefreshToken");
+    // "AND revoked_at IS NULL" makes this a compare-and-set: of two concurrent refreshes with the
+    // same token, exactly one sees rowCount 1. The other is treated as reuse.
+    const result = await this.pool.query(
+      "UPDATE refresh_tokens SET revoked_at = $1 WHERE id = $2 AND revoked_at IS NULL",
+      [at, id],
+    );
+    return result.rowCount === 1;
   }
 
   async revokeAllRefreshTokens(userId: number, at: Date) {
-    // TODO(phase-3 M2): revoke every not-yet-revoked token of the user.
-    return todo("TODO(phase-3 M2): PgUserRepository.revokeAllRefreshTokens");
+    await this.pool.query(
+      "UPDATE refresh_tokens SET revoked_at = $1 WHERE user_id = $2 AND revoked_at IS NULL",
+      [at, userId],
+    );
   }
 
   async ping() {
@@ -227,38 +246,84 @@ export class PgPostRepository implements PostRepository {
   }
 
   async insertPost(post: Post) {
-    // TODO(phase-3 M3): one transaction: INSERT the post (unique violation on slug -> DuplicateError),
-    // upsert the tags, link them, return the post read back with author name and tags.
-    return todo("TODO(phase-3 M3): PgPostRepository.insertPost");
+    try {
+      return await inTransaction(this.pool, async (db) => {
+        const { rows } = await db.query(
+          "INSERT INTO posts (slug, author_id, title, body, status, created_at, updated_at, published_at) " +
+            "VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id",
+          [
+            post.slug,
+            post.authorId,
+            post.title,
+            post.body,
+            post.status,
+            post.createdAt,
+            post.updatedAt,
+            post.publishedAt,
+          ],
+        );
+        const id = num(rows[0].id);
+        await replaceTags(db, id, post.tags);
+        return (await this.selectOne(db, "WHERE p.id = $1", [id]))!;
+      });
+    } catch (err) {
+      if (isUniqueViolation(err)) throw new DuplicateError("slug");
+      throw err;
+    }
   }
 
   findPost(slug: string) {
-    // TODO(phase-3 M3): by slug, not deleted, with author name and tags.
-    return todo("TODO(phase-3 M3): PgPostRepository.findPost");
+    return this.selectOne(this.pool, "WHERE p.slug = $1 AND p.deleted_at IS NULL", [slug]);
   }
 
   updatePost(post: Post, expectedVersion: number) {
-    // TODO(phase-3 M3): UPDATE ... WHERE id = ? AND version = ? AND deleted_at IS NULL, version = version
-    // + 1; 0 rows -> null (conflict). Replace the tags in the same transaction.
-    return todo("TODO(phase-3 M3): PgPostRepository.updatePost");
+    return inTransaction(this.pool, async (db) => {
+      // Optimistic locking: the WHERE clause only matches if nobody saved in between.
+      const { rowCount } = await db.query(
+        "UPDATE posts SET title = $1, body = $2, status = $3, published_at = $4, updated_at = $5, " +
+          "version = version + 1 WHERE id = $6 AND version = $7 AND deleted_at IS NULL",
+        [post.title, post.body, post.status, post.publishedAt, post.updatedAt, post.id, expectedVersion],
+      );
+      if (rowCount !== 1) return null;
+      await replaceTags(db, post.id, post.tags);
+      return this.selectOne(db, "WHERE p.id = $1", [post.id]);
+    });
   }
 
   async softDeletePost(id: number, at: Date) {
-    // TODO(phase-3 M3): set deleted_at; never DELETE the row.
-    return todo("TODO(phase-3 M3): PgPostRepository.softDeletePost");
+    await this.pool.query("UPDATE posts SET deleted_at = $1 WHERE id = $2 AND deleted_at IS NULL", [at, id]);
   }
 
   async feed(query: FeedQuery) {
-    // TODO(phase-3 M4): WHERE published AND not deleted [AND tag] [AND search_vector @@
-    // websearch_to_tsquery('english', q)] [AND (published_at, id) < (cursor)] ORDER BY published_at DESC,
-    // id DESC LIMIT n. Uses the index from V1.
-    return todo("TODO(phase-3 M4): PgPostRepository.feed");
+    const where = ["p.status = 'published'", "p.deleted_at IS NULL"];
+    const params: unknown[] = [];
+    const param = (v: unknown) => {
+      params.push(v);
+      return `$${params.length}`;
+    };
+    if (query.tag) {
+      where.push(
+        "EXISTS (SELECT 1 FROM post_tags pt JOIN tags t ON t.id = pt.tag_id " +
+          `WHERE pt.post_id = p.id AND t.name = ${param(query.tag)})`,
+      );
+    }
+    if (query.q) where.push(`p.search_vector @@ websearch_to_tsquery('english', ${param(query.q)})`);
+    if (query.after) {
+      // Keyset pagination: "everything older than the last row I saw" - no OFFSET scan.
+      where.push(`(p.published_at, p.id) < (${param(query.after.publishedAt)}, ${param(query.after.id)})`);
+    }
+    const sql = `${POST_SELECT}WHERE ${where.join(" AND ")} ORDER BY p.published_at DESC, p.id DESC LIMIT ${param(query.limit)}`;
+    const { rows } = await this.pool.query(sql, params);
+    return rows.map(toPost);
   }
 
   async tagCounts() {
-    // TODO(phase-3 M4): SELECT name, COUNT(*) over published, non-deleted posts GROUP BY name ORDER BY
-    // name.
-    return todo("TODO(phase-3 M4): PgPostRepository.tagCounts");
+    const { rows } = await this.pool.query(
+      "SELECT t.name, COUNT(*)::int AS posts FROM tags t JOIN post_tags pt ON pt.tag_id = t.id " +
+        "JOIN posts p ON p.id = pt.post_id WHERE p.status = 'published' AND p.deleted_at IS NULL " +
+        "GROUP BY t.name ORDER BY COUNT(*) DESC, t.name",
+    );
+    return rows.map((r) => ({ name: r.name as string, posts: r.posts as number }));
   }
 }
 
@@ -271,33 +336,60 @@ export class PgCommentRepository implements CommentRepository {
   }
 
   async insertComment(c: Comment) {
-    // TODO(phase-3 M5): INSERT with the moderation columns, read it back with author name and post slug.
-    return todo("TODO(phase-3 M5): PgCommentRepository.insertComment");
+    const m = c.moderation;
+    const { rows } = await this.pool.query(
+      "INSERT INTO comments (post_id, author_id, parent_id, body, status, moderation_label, " +
+        "moderation_confidence, moderation_provider, moderation_fallback, moderation_reason, created_at) " +
+        "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id",
+      [
+        c.postId,
+        c.authorId,
+        c.parentId,
+        c.body,
+        c.status,
+        m.label,
+        m.confidence,
+        m.provider,
+        m.fallback,
+        m.reason,
+        c.createdAt,
+      ],
+    );
+    return (await this.findComment(num(rows[0].id)))!;
   }
 
   async findComment(id: number) {
-    // TODO(phase-3 M5): by id, not deleted.
-    return todo("TODO(phase-3 M5): PgCommentRepository.findComment");
+    const rows = await this.query("WHERE c.id = $1 AND c.deleted_at IS NULL", [id]);
+    return rows[0] ?? null;
   }
 
   visibleComments(postId: number) {
-    // TODO(phase-3 M5): status 'visible', not deleted, ORDER BY created_at, id.
-    return todo("TODO(phase-3 M5): PgCommentRepository.visibleComments");
+    return this.query(
+      "WHERE c.post_id = $1 AND c.status = 'visible' AND c.deleted_at IS NULL ORDER BY c.created_at, c.id",
+      [postId],
+    );
   }
 
   commentsByStatus(status: CommentStatus) {
-    // TODO(phase-3 M5): by status, not deleted, post not deleted, ORDER BY created_at, id.
-    return todo("TODO(phase-3 M5): PgCommentRepository.commentsByStatus");
+    return this.query(
+      "WHERE c.status = $1 AND c.deleted_at IS NULL AND p.deleted_at IS NULL ORDER BY c.created_at, c.id",
+      [status],
+    );
   }
 
   async setCommentStatus(id: number, status: CommentStatus, by: number, at: Date) {
-    // TODO(phase-3 M5): UPDATE status, moderated_by, moderated_at RETURNING; null if missing.
-    return todo("TODO(phase-3 M5): PgCommentRepository.setCommentStatus");
+    await this.pool.query(
+      "UPDATE comments SET status = $1, moderated_by = $2, moderated_at = $3 WHERE id = $4 AND deleted_at IS NULL",
+      [status, by, at, id],
+    );
+    return this.findComment(id);
   }
 
   async softDeleteComment(id: number, at: Date) {
-    // TODO(phase-3 M5): set deleted_at.
-    return todo("TODO(phase-3 M5): PgCommentRepository.softDeleteComment");
+    await this.pool.query("UPDATE comments SET deleted_at = $1 WHERE id = $2 AND deleted_at IS NULL", [
+      at,
+      id,
+    ]);
   }
 }
 

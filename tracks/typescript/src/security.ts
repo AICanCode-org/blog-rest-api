@@ -1,8 +1,10 @@
 // Passwords (bcrypt), access tokens (JWT, HS256) and refresh tokens (opaque, hashed at rest).
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import bcrypt from "bcryptjs";
+import { jwtVerify, SignJWT } from "jose";
 import type { Clock } from "./clock.js";
-import { type Principal, type User } from "./models.js";
+import { unauthorized } from "./errors.js";
+import { ROLES, type Principal, type Role, type User } from "./models.js";
 
 export const ISSUER = "devblog";
 export const ACCESS_TOKEN_TTL_SECONDS = 15 * 60;
@@ -20,13 +22,12 @@ export class PasswordHasher {
   }
 
   hash(password: string): Promise<string> {
-    // TODO(phase-3 M2): bcrypt with the configured cost (salt included in the hash).
-    throw new Error("TODO(phase-3 M2): PasswordHasher.hash");
+    return bcrypt.hash(password, this.cost);
   }
 
   async verify(password: string, passwordHash: string | null): Promise<boolean> {
-    // TODO(phase-3 M2): bcrypt check; never throw on a malformed hash, return false.
-    throw new Error("TODO(phase-3 M2): PasswordHasher.verify");
+    const ok = await bcrypt.compare(password, passwordHash ?? this.dummy);
+    return ok && passwordHash !== null;
   }
 }
 
@@ -52,26 +53,45 @@ export class TokenService {
   }
 
   issueAccessToken(user: User): Promise<string> {
-    // TODO(phase-3 M2): HS256 JWT with sub (user id as string), role, iss 'devblog', iat, exp = now + 900
-    // s, using the injected clock.
-    throw new Error("TODO(phase-3 M2): TokenService.issueAccessToken");
+    const now = Math.floor(this.clock().getTime() / 1000);
+    return new SignJWT({ role: user.role })
+      .setProtectedHeader({ alg: "HS256", typ: "JWT" })
+      .setSubject(String(user.id))
+      .setIssuer(ISSUER)
+      .setIssuedAt(now)
+      .setExpirationTime(now + ACCESS_TOKEN_TTL_SECONDS)
+      .sign(this.key);
   }
 
   async verifyAccessToken(token: string): Promise<Principal> {
-    // TODO(phase-3 M2): pin the algorithm to HS256, check signature, iss and exp against the injected
-    // clock; any problem -> 401 unauthorized. Return Principal(user id, role).
-    throw new Error("TODO(phase-3 M2): TokenService.verifyAccessToken");
+    let claims;
+    try {
+      // algorithms: ["HS256"] pins the algorithm: "alg": "none" or RS256 tokens are rejected.
+      // currentDate makes jose check exp against the injected clock, so tests can travel in time.
+      ({ payload: claims } = await jwtVerify(token, this.key, {
+        algorithms: ["HS256"],
+        issuer: ISSUER,
+        currentDate: this.clock(),
+        requiredClaims: ["exp", "sub"],
+      }));
+    } catch {
+      throw unauthorized("invalid or expired token");
+    }
+    const { exp, sub, role } = claims;
+    if (typeof exp !== "number" || exp * 1000 <= this.clock().getTime()) {
+      throw unauthorized("invalid or expired token");
+    }
+    if (typeof sub !== "string" || !/^[0-9]+$/.test(sub) || !ROLES.includes(role as Role)) {
+      throw unauthorized("invalid or expired token");
+    }
+    return { userId: Number(sub), role: role as Role };
   }
 }
 
-export function hashRefreshToken(token: string): string {
-  // TODO(phase-3 M2): SHA-256 hex digest. Only the hash is stored (like a password, but fast is fine: it
-  // has 256 bits of entropy).
-  throw new Error("TODO(phase-3 M2): hashRefreshToken");
-}
+export const hashRefreshToken = (token: string) => createHash("sha256").update(token, "utf8").digest("hex");
 
 /** Returns the token for the client and its SHA-256 hex digest for the database. */
 export function newRefreshToken(): { token: string; hash: string } {
-  // TODO(phase-3 M2): 32 random bytes from a CSPRNG, base64url without padding. Opaque: not a JWT.
-  throw new Error("TODO(phase-3 M2): newRefreshToken");
+  const token = randomBytes(32).toString("base64url");
+  return { token, hash: hashRefreshToken(token) };
 }

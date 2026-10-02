@@ -6,11 +6,12 @@
 //
 // The LLM is any OpenAI-compatible /chat/completions endpoint: Ollama locally, or a free Gemini/Groq key.
 import type { Label, Moderation } from "./models.js";
+import { plainText, shorten } from "./text.js";
 
 export const HOLD_THRESHOLD = 0.7;
 export const SUMMARY_MAX = 280;
 export const LLM_INPUT_MAX = 4000; // cost cap: never send more than this many characters of a post
-export const LABELS: readonly Label[] = ["ok", "spam", "toxic"];
+const LABELS: readonly Label[] = ["ok", "spam", "toxic"];
 
 export const TOXIC_TERMS = ["idiot", "stupid", "moron", "dumb", "loser", "shut up", "trash", "hate you"];
 export const SPAM_PHRASES = [
@@ -21,8 +22,8 @@ export const SPAM_PHRASES = [
   "work from home",
   "giveaway",
 ];
-export const LINK = /https?:\/\/|www\./g;
-export const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const LINK = /https?:\/\/|www\./g;
+const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 export type Log = { warn: (msg: string) => void };
 const consoleLog: Log = { warn: (msg) => console.warn(msg) };
@@ -76,15 +77,23 @@ export interface Moderator {
 /** Deterministic and offline. The term lists and the order of the checks are part of the spec. */
 export class RuleModerator implements Moderator {
   async classify(text: string): Promise<Verdict> {
-    // TODO(phase-3 M5): see the moderation tests: toxic words (whole words) 0.9, spam phrases 0.9, 2+
-    // links spam 0.75 'N links', otherwise ok 0.6 'no rule matched'.
-    throw new Error("TODO(phase-3 M5): RuleModerator.classify");
+    return this.classifySync(text);
   }
 
   classifySync(text: string): Verdict {
-    // TODO(phase-3 M5): the rules themselves (classify() just wraps this in a Promise): see the moderation
-    //   tests.
-    throw new Error("TODO(phase-3 M5): RuleModerator.classifySync");
+    const lower = text.toLowerCase();
+    for (const term of TOXIC_TERMS) {
+      // \b like Python's re: a word boundary between [A-Za-z0-9_] and anything else
+      if (new RegExp(`\\b${escapeRegex(term)}\\b`).test(lower)) {
+        return { label: "toxic", confidence: 0.9, reason: `toxic language: ${term}` };
+      }
+    }
+    for (const phrase of SPAM_PHRASES) {
+      if (lower.includes(phrase)) return { label: "spam", confidence: 0.9, reason: `spam phrase: ${phrase}` };
+    }
+    const links = lower.match(LINK)?.length ?? 0;
+    if (links >= 2) return { label: "spam", confidence: 0.75, reason: `${links} links` };
+    return { label: "ok", confidence: 0.6, reason: "no rule matched" };
   }
 }
 
@@ -96,20 +105,29 @@ export const MODERATION_PROMPT =
 
 /** Strictly validate the model's answer. Anything unexpected throws, which triggers the fallback. */
 export function parseVerdict(raw: string): Verdict {
-  // TODO(phase-3 M5): find the JSON object in the answer; label in ok/spam/toxic, confidence a number
-  // 0..1 (round to 2 decimals), reason a string (collapse spaces, at most 200). Anything else -> throw
-  // (the caller falls back).
-  throw new Error("TODO(phase-3 M5): parseVerdict");
+  const start = raw.indexOf("{");
+  const end = raw.lastIndexOf("}");
+  if (start < 0 || end < start) throw new Error("no JSON object in LLM answer");
+  const data = JSON.parse(raw.slice(start, end + 1)) as Record<string, unknown>;
+  const { label, confidence } = data;
+  const reason = data.reason ?? "";
+  if (!LABELS.includes(label as Label)) throw new Error(`unknown label ${JSON.stringify(label)}`);
+  if (typeof confidence !== "number" || !(confidence >= 0 && confidence <= 1)) {
+    throw new Error(`confidence out of range: ${JSON.stringify(confidence)}`);
+  }
+  if (typeof reason !== "string") throw new Error("reason must be a string");
+  return {
+    label: label as Label,
+    confidence: Math.round(confidence * 100) / 100,
+    reason: shorten(reason.split(/\s+/).filter(Boolean).join(" "), 200) || "llm",
+  };
 }
 
 export class LlmModerator implements Moderator {
   constructor(private readonly client: LlmClient) {}
 
   async classify(text: string): Promise<Verdict> {
-    // TODO(phase-3 M5): one POST {LLM_BASE_URL}/chat/completions (OpenAI-compatible, Bearer LLM_API_KEY if
-    //   set, LLM_TIMEOUT_MS) with a system prompt asking for JSON {label, confidence, reason}; return
-    //   parse_verdict(answer). Let errors propagate: ModerationService falls back.
-    throw new Error("TODO(phase-3 M5): LlmModerator.classify");
+    return parseVerdict(await this.client.chat(MODERATION_PROMPT, `<comment>\n${text}\n</comment>`, 60));
   }
 }
 
@@ -121,36 +139,39 @@ export class ModerationService {
   ) {}
 
   async moderate(text: string): Promise<Moderation> {
-    // TODO(phase-3 M5): LLM first if configured; ANY exception -> rules with fallback=true (log a
-    // warning). No LLM -> rules with fallback=false.
-    throw new Error("TODO(phase-3 M5): ModerationService.moderate");
+    if (this.llm) {
+      try {
+        const v = await this.llm.classify(text);
+        return { ...v, provider: "llm", fallback: false };
+      } catch (err) {
+        // any LLM failure -> graceful fallback
+        this.log.warn(`LLM moderation failed, using rules: ${(err as Error).message}`);
+        return { ...this.rules.classifySync(text), provider: "rules", fallback: true };
+      }
+    }
+    return { ...this.rules.classifySync(text), provider: "rules", fallback: false };
   }
 }
 
-export function shouldHold(m: Moderation): boolean {
-  // TODO(phase-3 M5): label != ok AND confidence >= HOLD_THRESHOLD (0.7).
-  throw new Error("TODO(phase-3 M5): shouldHold");
-}
+export const shouldHold = (m: Moderation) => m.label !== "ok" && m.confidence >= HOLD_THRESHOLD;
 
 // ---- summaries --------------------------------------------------------------------------------
 export interface Summarizer {
   summarize(title: string, body: string): Promise<string>;
 }
 
-export const SENTENCE_END = /(?<=[.!?])\s+/;
+const SENTENCE_END = /(?<=[.!?])\s+/;
 
 /** The first two sentences of the post, at most 280 characters. Deterministic and offline. */
 export class TemplateSummarizer implements Summarizer {
   async summarize(title: string, body: string): Promise<string> {
-    // TODO(phase-3 M5): deterministic: the first two sentences of plain_text(body), at most 280 characters;
-    //   an empty body -> the title. Exact cases: see the summary tests.
-    throw new Error("TODO(phase-3 M5): TemplateSummarizer.summarize");
+    return this.summarizeSync(title, body);
   }
 
   summarizeSync(title: string, body: string): string {
-    // TODO(phase-3 M5): the template itself (summarize() wraps it): first two sentences of plainText(body),
-    //   at most 280 characters; empty body -> the title.
-    throw new Error("TODO(phase-3 M5): TemplateSummarizer.summarizeSync");
+    const text = plainText(body);
+    if (!text) return shorten(title, SUMMARY_MAX);
+    return shorten(text.split(SENTENCE_END).slice(0, 2).join(" "), SUMMARY_MAX);
   }
 }
 
@@ -162,9 +183,10 @@ export class LlmSummarizer implements Summarizer {
   constructor(private readonly client: LlmClient) {}
 
   async summarize(title: string, body: string): Promise<string> {
-    // TODO(phase-3 M5): cap the input at LLM_INPUT_MAX, one chat/completions call, clean the answer (collapse
-    //   spaces, at most 280); an empty answer is an error. Let errors propagate.
-    throw new Error("TODO(phase-3 M5): LlmSummarizer.summarize");
+    const prompt = `<post>\nTitle: ${title}\n\n${body.slice(0, LLM_INPUT_MAX)}\n</post>`;
+    const text = (await this.client.chat(SUMMARY_PROMPT, prompt, 120)).split(/\s+/).filter(Boolean).join(" ");
+    if (!text) throw new Error("empty summary");
+    return shorten(text, SUMMARY_MAX);
   }
 }
 
@@ -182,8 +204,14 @@ export class SummaryService {
   ) {}
 
   async summarize(title: string, body: string): Promise<SummaryResult> {
-    // TODO(phase-3 M5): LLM if configured, ANY exception -> template with fallback=true (log a warning); no
-    //   LLM -> template with fallback=false.
-    throw new Error("TODO(phase-3 M5): SummaryService.summarize");
+    if (this.llm) {
+      try {
+        return { provider: "llm", fallback: false, summary: await this.llm.summarize(title, body) };
+      } catch (err) {
+        this.log.warn(`LLM summary failed, using template: ${(err as Error).message}`);
+        return { provider: "template", fallback: true, summary: this.template.summarizeSync(title, body) };
+      }
+    }
+    return { provider: "template", fallback: false, summary: this.template.summarizeSync(title, body) };
   }
 }
