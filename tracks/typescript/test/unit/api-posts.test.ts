@@ -28,6 +28,7 @@ describe("posts API", () => {
       createdAt: "2026-10-02T09:30:00.000Z",
       updatedAt: "2026-10-02T09:30:00.000Z",
       publishedAt: null,
+      coverImageUrl: null,
       version: 1,
     });
   });

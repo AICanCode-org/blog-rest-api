@@ -1,6 +1,7 @@
 // Comments with AI moderation and a human moderation queue.
 import { shouldHold, type ModerationService } from "./ai.js";
 import { requireRole } from "./auth.js";
+import { Metrics } from "./metrics.js";
 import type { Clock } from "./clock.js";
 import { forbidden, notFound, validationError } from "./errors.js";
 import { isAdmin, type Comment, type Post, type Principal } from "./models.js";
@@ -13,6 +14,7 @@ export class CommentService {
     private readonly posts: PostRepository,
     private readonly moderation: ModerationService,
     private readonly clock: Clock,
+    private readonly metrics: Metrics = new Metrics(),
   ) {}
 
   private async publishedPost(slug: string): Promise<Post> {
@@ -33,7 +35,8 @@ export class CommentService {
       }
     }
     const moderation = await this.moderation.moderate(body);
-    return this.comments.insertComment({
+    const status = shouldHold(moderation) ? "held" : "visible";
+    const saved = await this.comments.insertComment({
       id: 0,
       postId: post.id,
       postSlug: post.slug,
@@ -41,12 +44,16 @@ export class CommentService {
       authorName: "",
       parentId,
       body,
-      status: shouldHold(moderation) ? "held" : "visible",
+      status,
       moderation,
       createdAt: this.clock(),
       moderatedBy: null,
       moderatedAt: null,
     });
+    this.metrics.inc("devblog_comments_created_total");
+    if (status === "held") this.metrics.inc("devblog_comments_held_total");
+    if (moderation.fallback) this.metrics.inc("devblog_ai_fallback_total");
+    return saved;
   }
 
   async list(slug: string): Promise<Comment[]> {

@@ -151,6 +151,7 @@ describe("feed over HTTP", () => {
     const item = first.items[0];
     expect(Object.keys(item).sort()).toEqual([
       "author",
+      "coverImageUrl",
       "excerpt",
       "id",
       "publishedAt",

@@ -7,7 +7,8 @@ import type { Principal, Role } from "../src/models.js";
 import { loadSettings, type Settings } from "../src/config.js";
 import { ApiError } from "../src/errors.js";
 import { InMemoryStore } from "../src/repository.js";
-import { wire } from "../src/wiring.js";
+import type { Metrics } from "../src/metrics.js";
+import { wire, type buildAi } from "../src/wiring.js";
 
 export const TEST_SECRET = "test-secret-that-is-at-least-32-bytes-long";
 
@@ -65,14 +66,21 @@ export class Api {
     readonly clock: FakeClock,
   ) {}
 
-  static async create(): Promise<Api> {
+  static async create(
+    opts: { settings?: Partial<Settings>; ai?: ReturnType<typeof buildAi>; metrics?: Metrics } = {},
+  ): Promise<Api> {
     const store = new InMemoryStore();
     const clock = new FakeClock();
-    const settings = testSettings({ adminEmail: "admin@devblog.test", adminPassword: "admin-password" });
+    const settings = testSettings({
+      adminEmail: "admin@devblog.test",
+      adminPassword: "admin-password",
+      ...opts.settings,
+    });
+    const ai = opts.ai ?? (settings.aiProvider === "llm" ? undefined : offlineAi());
     const deps = await wire(
       settings,
       { users: store, posts: store, comments: store },
-      { clock: clock.fn, ai: offlineAi(), warn: () => {} },
+      { clock: clock.fn, ai, warn: () => {}, metrics: opts.metrics },
     );
     return new Api(buildApp(deps), store, clock);
   }

@@ -61,7 +61,7 @@ const isUniqueViolation = (err: unknown) => (err as { code?: string }).code === 
 const USER_COLS = "id, email, password_hash, display_name, role, created_at";
 const POST_SELECT = `
 SELECT p.id, p.slug, p.author_id, u.display_name AS author_name, p.title, p.body, p.status, p.version,
-       p.created_at, p.updated_at, p.published_at,
+       p.created_at, p.updated_at, p.published_at, p.cover_image_url,
        ARRAY(SELECT t.name FROM post_tags pt JOIN tags t ON t.id = pt.tag_id
              WHERE pt.post_id = p.id ORDER BY t.name) AS tags
 FROM posts p JOIN users u ON u.id = p.author_id
@@ -100,6 +100,7 @@ const toPost = (r: Row): Post => ({
   createdAt: r.created_at as Date,
   updatedAt: r.updated_at as Date,
   publishedAt: (r.published_at as Date | null) ?? null,
+  coverImageUrl: (r.cover_image_url as string | null) ?? null,
 });
 
 const toComment = (r: Row): Comment => ({
@@ -249,8 +250,8 @@ export class PgPostRepository implements PostRepository {
     try {
       return await inTransaction(this.pool, async (db) => {
         const { rows } = await db.query(
-          "INSERT INTO posts (slug, author_id, title, body, status, created_at, updated_at, published_at) " +
-            "VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id",
+          "INSERT INTO posts (slug, author_id, title, body, status, created_at, updated_at, published_at, " +
+            "cover_image_url) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id",
           [
             post.slug,
             post.authorId,
@@ -260,6 +261,7 @@ export class PgPostRepository implements PostRepository {
             post.createdAt,
             post.updatedAt,
             post.publishedAt,
+            post.coverImageUrl,
           ],
         );
         const id = num(rows[0].id);
@@ -281,8 +283,17 @@ export class PgPostRepository implements PostRepository {
       // Optimistic locking: the WHERE clause only matches if nobody saved in between.
       const { rowCount } = await db.query(
         "UPDATE posts SET title = $1, body = $2, status = $3, published_at = $4, updated_at = $5, " +
-          "version = version + 1 WHERE id = $6 AND version = $7 AND deleted_at IS NULL",
-        [post.title, post.body, post.status, post.publishedAt, post.updatedAt, post.id, expectedVersion],
+          "cover_image_url = $6, version = version + 1 WHERE id = $7 AND version = $8 AND deleted_at IS NULL",
+        [
+          post.title,
+          post.body,
+          post.status,
+          post.publishedAt,
+          post.updatedAt,
+          post.coverImageUrl,
+          post.id,
+          expectedVersion,
+        ],
       );
       if (rowCount !== 1) return null;
       await replaceTags(db, post.id, post.tags);

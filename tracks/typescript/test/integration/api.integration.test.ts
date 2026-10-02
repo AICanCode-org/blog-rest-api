@@ -74,7 +74,10 @@ describe("API against PostgreSQL", () => {
 
   it("is healthy and records the migrations", async () => {
     expect((await req("GET", "/health")).json()).toEqual({ status: "UP", checks: { database: "UP" } });
-    expect((await sql("SELECT version FROM schema_migrations ORDER BY version"))[0].version).toBe(1);
+    const versions = (await sql("SELECT version FROM schema_migrations ORDER BY version")).map(
+      (r) => r.version,
+    );
+    expect(versions.slice(0, 2)).toEqual([1, 2]);
   });
 
   it("never stores passwords or refresh tokens in clear", async () => {
@@ -207,6 +210,21 @@ describe("API against PostgreSQL", () => {
     expect(
       await sql("SELECT status, moderated_by IS NOT NULL AS by FROM comments WHERE id = $1", [held.id]),
     ).toEqual([{ status: "rejected", by: true }]);
+  });
+
+  it("stores the cover image URL (V2 migration)", async () => {
+    const author = await makeUser("ada@devblog.test", "AUTHOR");
+    const cover = "https://img.example/c.png";
+    const { slug } = await create(author, {
+      title: "Cover",
+      body: "b",
+      status: "published",
+      coverImageUrl: cover,
+    });
+    expect(await sql("SELECT cover_image_url FROM posts WHERE slug = $1", [slug])).toEqual([
+      { cover_image_url: cover },
+    ]);
+    expect((await req("GET", "/api/v1/posts")).json().items[0].coverImageUrl).toBe(cover);
   });
 
   it("bootstraps the admin from the environment", async () => {

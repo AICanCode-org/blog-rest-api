@@ -48,6 +48,8 @@ export interface Post {
   createdAt: Date;
   updatedAt: Date;
   publishedAt: Date | null;
+  /** v1.1 */
+  coverImageUrl: string | null;
 }
 
 export type Label = "ok" | "spam" | "toxic";

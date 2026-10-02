@@ -7,6 +7,8 @@ import { ROLES, type CommentStatus, type PostStatus, type Role } from "./models.
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 const TAG_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 const DIGITS_RE = /^[0-9]+$/;
+const COVER_URL_RE = /^[Hh][Tt][Tt][Pp][Ss]?:\/\/[A-Za-z0-9.-]+(:[0-9]{1,5})?([/?#]\S*)?$/;
+export const MAX_COVER_URL = 2048;
 export const MAX_TAGS = 5;
 export const MAX_BODY = 50_000;
 export const MAX_COMMENT = 2_000;
@@ -150,4 +152,13 @@ export function decision(value: unknown): "approve" | "reject" {
 export function pathId(value: string, what: string): number {
   if (!DIGITS_RE.test(value) || value.length > 15) throw notFound(what);
   return Number(value);
+}
+
+/** v1.1: optional. null clears it. Only absolute http(s) URLs: no javascript:, data: or file: tricks. */
+export function coverImageUrl(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== "string" || [...value].length > MAX_COVER_URL || !COVER_URL_RE.test(value)) {
+    throw validationError("coverImageUrl must be an http(s) URL of at most 2048 characters");
+  }
+  return value;
 }
