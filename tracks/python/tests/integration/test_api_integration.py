@@ -62,7 +62,7 @@ def make_user(client, email, role="READER"):
 
 def test_health_and_migrations(client):
     assert client.get("/health").json() == {"status": "UP", "checks": {"database": "UP"}}
-    assert [r[0] for r in sql("SELECT version FROM schema_migrations ORDER BY version")][:1] == [1]
+    assert [r[0] for r in sql("SELECT version FROM schema_migrations ORDER BY version")][:2] == [1, 2]
 
 
 def test_passwords_and_refresh_tokens_are_never_stored_in_clear(client):
@@ -182,6 +182,14 @@ def test_comments_and_moderation_are_persisted(client):
     assert sql("SELECT status, moderated_by IS NOT NULL FROM comments WHERE id = %s", (held["id"],)) == [
         ("rejected", True)
     ]
+
+
+def test_cover_image_url_is_stored_by_the_v2_migration(client):
+    author = make_user(client, "ada@devblog.test", "AUTHOR")
+    body = {"title": "Cover", "body": "b", "status": "published", "coverImageUrl": "https://img.example/c.png"}
+    slug = client.post("/api/v1/posts", json=body, headers=h(author)).json()["slug"]
+    assert sql("SELECT cover_image_url FROM posts WHERE slug = %s", (slug,)) == [("https://img.example/c.png",)]
+    assert client.get("/api/v1/posts").json()["items"][0]["coverImageUrl"] == "https://img.example/c.png"
 
 
 def test_admin_is_bootstrapped_from_the_environment(client):

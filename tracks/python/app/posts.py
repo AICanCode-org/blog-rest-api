@@ -9,6 +9,7 @@ from .ai import SummaryResult, SummaryService
 from .auth import require_role
 from .clock import Clock
 from .errors import DuplicateError, forbidden, not_found, validation_error, version_conflict
+from .metrics import Metrics
 from .models import FeedQuery, Post, Principal, TagCount
 from .repository import PostRepository
 from .text import decode_cursor, encode_cursor, slugify
@@ -27,27 +28,32 @@ def can_edit(principal: Principal, post: Post) -> bool:
 
 
 class PostService:
-    def __init__(self, posts: PostRepository, clock: Clock, summaries: SummaryService):
+    def __init__(self, posts: PostRepository, clock: Clock, summaries: SummaryService, metrics: Metrics | None = None):
         self.posts = posts
         self._clock = clock
         self._summaries = summaries
+        self._metrics = metrics or Metrics()
 
     def create(self, principal: Principal, payload: object) -> Post:
         require_role(principal, "AUTHOR", "ADMIN")
         data = v.require_object(payload)
         title, body = v.title(data.get("title")), v.body(data.get("body"))
         tags, status = v.tags(data.get("tags")), v.status(data.get("status"))
+        cover = v.cover_image_url(data.get("coverImageUrl"))
         now = self._clock()
         base = slugify(title)
         for attempt in range(1, MAX_SLUG_ATTEMPTS + 1):
             slug = base if attempt == 1 else f"{base}-{attempt}"
             draft = Post(0, slug, principal.user_id, "", title, body, status, tags, 1, now, now,
-                         now if status == "published" else None)  # fmt: skip
+                         now if status == "published" else None, cover)  # fmt: skip
             try:
                 # Insert and let the unique constraint decide: "check, then insert" would race.
-                return self.posts.insert_post(draft)
+                created = self.posts.insert_post(draft)
             except DuplicateError:
                 continue
+            if created.status == "published":
+                self._metrics.inc("devblog_posts_published_total")
+            return created
         raise validation_error("too many posts with this title")
 
     def get(self, principal: Principal | None, slug: str) -> Post:
@@ -60,8 +66,8 @@ class PostService:
     def update(self, principal: Principal, slug: str, payload: object) -> Post:
         data = v.require_object(payload)
         expected = v.version(data.get("version"))
-        if not any(k in data for k in ("title", "body", "tags", "status")):
-            raise validation_error("nothing to update: send title, body, tags or status")
+        if not any(k in data for k in ("title", "body", "tags", "status", "coverImageUrl")):
+            raise validation_error("nothing to update: send title, body, tags, status or coverImageUrl")
         post = self.get(principal, slug)
         if not can_edit(principal, post):
             raise forbidden("only the author or an ADMIN can edit this post")
@@ -71,6 +77,9 @@ class PostService:
             body=v.body(data["body"]) if "body" in data else post.body,
             tags=v.tags(data["tags"]) if "tags" in data else post.tags,
             status=v.status(data["status"], default=None) if "status" in data else post.status,
+            cover_image_url=(
+                v.cover_image_url(data["coverImageUrl"]) if "coverImageUrl" in data else post.cover_image_url
+            ),
             updated_at=self._clock(),
         )
         if changed.status == "published" and changed.published_at is None:
@@ -78,6 +87,8 @@ class PostService:
         saved = self.posts.update_post(changed, expected)
         if saved is None:
             raise version_conflict(post.version)
+        if post.published_at is None and saved.published_at is not None:
+            self._metrics.inc("devblog_posts_published_total")
         return saved
 
     def delete(self, principal: Principal, slug: str) -> None:

@@ -108,7 +108,7 @@ def test_feed_endpoint_shape_and_cursor(api, client, clock):
     first = client.get("/api/v1/posts?limit=2").json()
     assert [p["title"] for p in first["items"]] == ["Post 2", "Post 1"] and first["nextCursor"]
     item = first["items"][0]
-    assert set(item) == {"id", "slug", "title", "excerpt", "tags", "author", "publishedAt"}
+    assert set(item) == {"id", "slug", "title", "excerpt", "tags", "author", "publishedAt", "coverImageUrl"}
     assert item["author"] == {"id": author["user"]["id"], "displayName": "Ada"}
     assert len(item["excerpt"]) <= 160 and item["excerpt"].endswith("...")
     second = client.get(f"/api/v1/posts?limit=2&cursor={first['nextCursor']}").json()

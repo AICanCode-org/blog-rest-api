@@ -1,6 +1,6 @@
 [project]
 name = "devblog-python"
-version = "1.0.0"
+version = "1.1.0"
 description = "DevBlog secure blog REST API - Python/FastAPI track (AiCanCode)"
 requires-python = ">=3.11"
 

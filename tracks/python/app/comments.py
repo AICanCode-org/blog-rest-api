@@ -7,12 +7,21 @@ from .ai import ModerationService, should_hold
 from .auth import require_role
 from .clock import Clock
 from .errors import forbidden, not_found, validation_error
+from .metrics import Metrics
 from .models import Comment, Post, Principal
 from .repository import CommentRepository, PostRepository
 
 
 class CommentService:
-    def __init__(self, comments: CommentRepository, posts: PostRepository, moderation: ModerationService, clock: Clock):
+    def __init__(
+        self,
+        comments: CommentRepository,
+        posts: PostRepository,
+        moderation: ModerationService,
+        clock: Clock,
+        metrics: Metrics | None = None,
+    ):
+        self._metrics = metrics or Metrics()
         self.comments = comments
         self._posts = posts
         self._moderation = moderation
@@ -42,7 +51,13 @@ class CommentService:
         status = "held" if should_hold(moderation) else "visible"
         comment = Comment(0, post.id, post.slug, principal.user_id, "", parent_id, body, status, moderation,
                           self._clock())  # fmt: skip
-        return self.comments.insert_comment(comment)
+        saved = self.comments.insert_comment(comment)
+        self._metrics.inc("devblog_comments_created_total")
+        if status == "held":
+            self._metrics.inc("devblog_comments_held_total")
+        if moderation.fallback:
+            self._metrics.inc("devblog_ai_fallback_total")
+        return saved
 
     def list(self, slug: str) -> list[Comment]:
         return self.comments.visible_comments(self._published_post(slug).id)

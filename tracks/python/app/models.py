@@ -61,6 +61,7 @@ class Post:
     created_at: datetime
     updated_at: datetime
     published_at: datetime | None = None
+    cover_image_url: str | None = None  # v1.1
 
 
 @dataclass(frozen=True)

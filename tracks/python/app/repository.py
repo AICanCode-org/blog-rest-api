@@ -60,7 +60,7 @@ class CommentRepository(Protocol):
 _USER_COLS = "id, email, password_hash, display_name, role, created_at"
 _POST_SELECT = """
 SELECT p.id, p.slug, p.author_id, u.display_name AS author_name, p.title, p.body, p.status, p.version,
-       p.created_at, p.updated_at, p.published_at,
+       p.created_at, p.updated_at, p.published_at, p.cover_image_url,
        ARRAY(SELECT t.name FROM post_tags pt JOIN tags t ON t.id = pt.tag_id
              WHERE pt.post_id = p.id ORDER BY t.name) AS tags
 FROM posts p JOIN users u ON u.id = p.author_id
@@ -185,10 +185,10 @@ class PostgresPostRepository:
         try:
             with self._pool.connection() as conn, conn.transaction(), conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(
-                    "INSERT INTO posts (slug, author_id, title, body, status, created_at, updated_at, published_at) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+                    "INSERT INTO posts (slug, author_id, title, body, status, created_at, updated_at, published_at, "
+                    "cover_image_url) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
                     (post.slug, post.author_id, post.title, post.body, post.status,
-                     post.created_at, post.updated_at, post.published_at),
+                     post.created_at, post.updated_at, post.published_at, post.cover_image_url),
                 )  # fmt: skip
                 post_id = cur.fetchone()["id"]
                 _replace_tags(cur, post_id, post.tags)
@@ -205,8 +205,18 @@ class PostgresPostRepository:
             # Optimistic locking: the WHERE clause only matches if nobody saved in between.
             cur.execute(
                 "UPDATE posts SET title = %s, body = %s, status = %s, published_at = %s, updated_at = %s, "
-                "version = version + 1 WHERE id = %s AND version = %s AND deleted_at IS NULL RETURNING id",
-                (post.title, post.body, post.status, post.published_at, post.updated_at, post.id, expected_version),
+                "cover_image_url = %s, version = version + 1 "
+                "WHERE id = %s AND version = %s AND deleted_at IS NULL RETURNING id",
+                (
+                    post.title,
+                    post.body,
+                    post.status,
+                    post.published_at,
+                    post.updated_at,
+                    post.cover_image_url,
+                    post.id,
+                    expected_version,
+                ),
             )
             if cur.fetchone() is None:
                 return None

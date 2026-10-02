@@ -8,11 +8,12 @@ from typing import Annotated
 
 from fastapi import Body, FastAPI, Header, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import validation as v
 from .ai import (
+    CircuitBreaker,
     LlmClient,
     LlmModerator,
     LlmSummarizer,
@@ -27,7 +28,9 @@ from .comments import CommentService
 from .config import Settings
 from .db import create_pool, run_migrations
 from .errors import ApiError, not_found, validation_error
+from .metrics import Metrics
 from .models import Comment, Post, TokenPair, User
+from .observability import RequestIdMiddleware, configure_logging
 from .posts import PostService
 from .repository import (
     CommentRepository,
@@ -44,11 +47,16 @@ log = logging.getLogger("devblog")
 PROBLEM_JSON = "application/problem+json"
 Auth = Annotated[str | None, Header(alias="Authorization")]
 JsonBody = Annotated[object, Body()]
+configure_logging()
 
 
-def build_ai(settings: Settings) -> tuple[ModerationService, SummaryService]:
+def build_ai(settings: Settings, metrics: Metrics | None = None) -> tuple[ModerationService, SummaryService]:
     if settings.ai_provider == "llm":
-        client = LlmClient(settings.llm_base_url, settings.llm_model, settings.llm_api_key, settings.llm_timeout_ms)
+        counters = metrics or Metrics()
+        client = CircuitBreaker(
+            LlmClient(settings.llm_base_url, settings.llm_model, settings.llm_api_key, settings.llm_timeout_ms),
+            on_short_circuit=lambda: counters.inc("devblog_llm_short_circuits_total"),
+        )
         return (
             ModerationService(RuleModerator(), LlmModerator(client)),
             SummaryService(TemplateSummarizer(), LlmSummarizer(client)),
@@ -83,6 +91,7 @@ def post_json(p: Post) -> dict:
         "createdAt": iso(p.created_at),
         "updatedAt": iso(p.updated_at),
         "publishedAt": iso(p.published_at),
+        "coverImageUrl": p.cover_image_url,
         "version": p.version,
     }
 
@@ -96,6 +105,7 @@ def post_item_json(p: Post) -> dict:
         "tags": p.tags,
         "author": {"id": p.author_id, "displayName": p.author_name},
         "publishedAt": iso(p.published_at),
+        "coverImageUrl": p.cover_image_url,
     }
 
 
@@ -127,9 +137,11 @@ def create_app(
     comments: CommentRepository | None = None,
     clock: Clock = utc_now,
     ai: tuple[ModerationService, SummaryService] | None = None,
+    metrics: Metrics | None = None,
 ) -> FastAPI:
     """Real adapters by default; tests pass in-memory repositories, a fake clock and fake AI."""
     settings = settings or Settings.from_env()
+    metrics = metrics or Metrics()
     state: dict = {}
 
     @asynccontextmanager
@@ -143,21 +155,22 @@ def create_app(
             user_repo = PostgresUserRepository(pool)
             post_repo = PostgresPostRepository(pool)
             comment_repo = PostgresCommentRepository(pool)
-        moderation, summaries = ai or build_ai(settings)
+        moderation, summaries = ai or build_ai(settings, metrics)
         tokens = TokenService(resolve_secret(settings.jwt_secret), clock)
         auth = AuthService(user_repo, PasswordHasher(settings.bcrypt_cost), tokens, clock)
         if settings.admin_email and settings.admin_password:
             auth.ensure_admin(settings.admin_email, settings.admin_password)
             log.info("admin account ensured for %s", settings.admin_email)
         state["auth"] = auth
-        state["posts"] = PostService(post_repo, clock, summaries)
-        state["comments"] = CommentService(comment_repo, post_repo, moderation, clock)
+        state["posts"] = PostService(post_repo, clock, summaries, metrics)
+        state["comments"] = CommentService(comment_repo, post_repo, moderation, clock, metrics)
         state["clock"] = clock
         yield
         if pool is not None:
             pool.close()
 
-    app = FastAPI(title="DevBlog (Python track)", version="1.0.0", lifespan=lifespan)
+    app = FastAPI(title="DevBlog (Python track)", version="1.1.0", lifespan=lifespan)
+    app.add_middleware(RequestIdMiddleware)
 
     def auth() -> AuthService:
         return state["auth"]
@@ -200,14 +213,25 @@ def create_app(
         body = {"status": "UP" if db_up else "DOWN", "checks": {"database": "UP" if db_up else "DOWN"}}
         return JSONResponse(body, status_code=200 if db_up else 503)
 
+    @app.get("/metrics")
+    def get_metrics():
+        return PlainTextResponse(metrics.render(), media_type="text/plain; version=0.0.4")
+
     # ---- auth ----------------------------------------------------------------
     @app.post("/api/v1/auth/register", status_code=201)
     def register(payload: JsonBody):
-        return JSONResponse(user_json(auth().register(payload)), status_code=201)
+        user = auth().register(payload)
+        metrics.inc("devblog_users_registered_total")
+        return JSONResponse(user_json(user), status_code=201)
 
     @app.post("/api/v1/auth/login")
     def login(payload: JsonBody):
-        return tokens_json(auth().login(payload))
+        try:
+            return tokens_json(auth().login(payload))
+        except ApiError as exc:
+            if exc.status == 401:
+                metrics.inc("devblog_logins_failed_total")
+            raise
 
     @app.post("/api/v1/auth/refresh")
     def refresh(payload: JsonBody):
@@ -249,6 +273,8 @@ def create_app(
     @app.get("/api/v1/posts/{slug}/summary")
     def post_summary(slug: str, authorization: Auth = None):
         post, result = post_service().summary(auth().optional(authorization), slug)
+        if result.fallback:
+            metrics.inc("devblog_ai_fallback_total")
         return {
             "slug": post.slug,
             "provider": result.provider,

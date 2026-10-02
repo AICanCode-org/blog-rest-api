@@ -13,6 +13,8 @@ from .models import ROLES
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 TAG_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
+COVER_URL_RE = re.compile(r"^[Hh][Tt][Tt][Pp][Ss]?://[A-Za-z0-9.-]+(:[0-9]{1,5})?([/?#]\S*)?$")
+MAX_COVER_URL = 2048
 DIGITS_RE = re.compile(r"^[0-9]+$")  # str.isdigit() would also accept "²" or Arabic-Indic digits
 MAX_TAGS = 5
 MAX_BODY = 50_000
@@ -90,6 +92,15 @@ def status(value: object, default: str | None = "draft") -> str:
     if value not in ("draft", "published"):
         raise validation_error("status must be draft or published")
     return value  # type: ignore[return-value]
+
+
+def cover_image_url(value: object) -> str | None:
+    """v1.1: optional. null clears it. Only absolute http(s) URLs: no javascript:, data: or file: tricks."""
+    if value is None:
+        return None
+    if not isinstance(value, str) or len(value) > MAX_COVER_URL or not COVER_URL_RE.match(value):
+        raise validation_error("coverImageUrl must be an http(s) URL of at most 2048 characters")
+    return value
 
 
 def version(value: object) -> int:

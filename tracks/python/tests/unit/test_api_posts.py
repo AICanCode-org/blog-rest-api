@@ -18,6 +18,7 @@ def test_create_post_returns_201_location_and_the_full_post(api, client):
         "createdAt": "2026-10-02T09:30:00.000Z",
         "updatedAt": "2026-10-02T09:30:00.000Z",
         "publishedAt": None,
+        "coverImageUrl": None,
         "version": 1,
     }
 
