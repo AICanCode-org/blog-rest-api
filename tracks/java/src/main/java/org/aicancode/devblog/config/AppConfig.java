@@ -4,7 +4,9 @@ import com.zaxxer.hikari.HikariDataSource;
 import java.nio.file.Path;
 import java.time.Clock;
 import javax.sql.DataSource;
+import org.aicancode.devblog.ai.CircuitBreaker;
 import org.aicancode.devblog.ai.HttpLlmClient;
+import org.aicancode.devblog.ai.LlmClient;
 import org.aicancode.devblog.ai.LlmModerator;
 import org.aicancode.devblog.ai.LlmSummarizer;
 import org.aicancode.devblog.ai.ModerationService;
@@ -13,6 +15,7 @@ import org.aicancode.devblog.ai.SummaryService;
 import org.aicancode.devblog.ai.TemplateSummarizer;
 import org.aicancode.devblog.db.DatabaseUrl;
 import org.aicancode.devblog.db.Migrator;
+import org.aicancode.devblog.metrics.Metrics;
 import org.aicancode.devblog.repo.CommentRepository;
 import org.aicancode.devblog.repo.JdbcCommentRepository;
 import org.aicancode.devblog.repo.JdbcPostRepository;
@@ -90,27 +93,42 @@ public class AppConfig {
     }
 
     @Bean
-    public ModerationService moderationService(AppProperties props) {
-        return new ModerationService(new RuleModerator(), props.llmEnabled() ? new LlmModerator(llm(props)) : null);
+    public Metrics metrics() {
+        return new Metrics();
+    }
+
+    /** One LLM client behind one circuit breaker, shared by moderation and summaries (v1.1). Null = offline. */
+    @Bean
+    public LlmClientHolder llmClient(AppProperties props, Metrics metrics) {
+        if (!props.llmEnabled()) {
+            return new LlmClientHolder(null);
+        }
+        HttpLlmClient http = new HttpLlmClient(props.llmBaseUrl(), props.llmModel(), props.llmApiKey(), props.llmTimeoutMs());
+        return new LlmClientHolder(new CircuitBreaker(http, () -> metrics.inc(Metrics.LLM_SHORT_CIRCUITS)));
+    }
+
+    /** Wrapper so "no LLM configured" can be a bean too. */
+    public record LlmClientHolder(LlmClient client) {
     }
 
     @Bean
-    public SummaryService summaryService(AppProperties props) {
-        return new SummaryService(new TemplateSummarizer(), props.llmEnabled() ? new LlmSummarizer(llm(props)) : null);
-    }
-
-    private static HttpLlmClient llm(AppProperties props) {
-        return new HttpLlmClient(props.llmBaseUrl(), props.llmModel(), props.llmApiKey(), props.llmTimeoutMs());
+    public ModerationService moderationService(LlmClientHolder llm) {
+        return new ModerationService(new RuleModerator(), llm.client() == null ? null : new LlmModerator(llm.client()));
     }
 
     @Bean
-    public PostService postService(PostRepository posts, Clock clock, SummaryService summaries) {
-        return new PostService(posts, clock, summaries);
+    public SummaryService summaryService(LlmClientHolder llm) {
+        return new SummaryService(new TemplateSummarizer(), llm.client() == null ? null : new LlmSummarizer(llm.client()));
+    }
+
+    @Bean
+    public PostService postService(PostRepository posts, Clock clock, SummaryService summaries, Metrics metrics) {
+        return new PostService(posts, clock, summaries, metrics);
     }
 
     @Bean
     public CommentService commentService(CommentRepository comments, PostRepository posts, ModerationService moderation,
-                                         Clock clock) {
-        return new CommentService(comments, posts, moderation, clock);
+                                         Clock clock, Metrics metrics) {
+        return new CommentService(comments, posts, moderation, clock, metrics);
     }
 }

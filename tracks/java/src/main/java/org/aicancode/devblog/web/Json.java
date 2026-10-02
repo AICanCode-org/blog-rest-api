@@ -56,6 +56,7 @@ final class Json {
         m.put("createdAt", Times.iso(p.createdAt()));
         m.put("updatedAt", Times.iso(p.updatedAt()));
         m.put("publishedAt", Times.iso(p.publishedAt()));
+        m.put("coverImageUrl", p.coverImageUrl());
         m.put("version", p.version());
         return m;
     }
@@ -69,6 +70,7 @@ final class Json {
         m.put("tags", p.tags());
         m.put("author", author(p.authorId(), p.authorName()));
         m.put("publishedAt", Times.iso(p.publishedAt()));
+        m.put("coverImageUrl", p.coverImageUrl());
         return m;
     }
 

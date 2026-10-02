@@ -33,7 +33,8 @@ public final class Models {
     }
 
     public record Post(long id, String slug, long authorId, String authorName, String title, String body, String status,
-                       List<String> tags, int version, Instant createdAt, Instant updatedAt, Instant publishedAt) {
+                       List<String> tags, int version, Instant createdAt, Instant updatedAt, Instant publishedAt,
+                       String coverImageUrl) {
     }
 
     public record Moderation(String label, double confidence, String provider, boolean fallback, String reason) {

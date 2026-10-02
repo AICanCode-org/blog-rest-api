@@ -119,7 +119,8 @@ public class InMemoryStore implements UserRepository, PostRepository, CommentRep
     // ---- posts ----
     private Post withAuthor(Post p) {
         return new Post(p.id(), p.slug(), p.authorId(), users.get(p.authorId()).displayName(), p.title(), p.body(),
-                p.status(), List.copyOf(p.tags()), p.version(), p.createdAt(), p.updatedAt(), p.publishedAt());
+                p.status(), List.copyOf(p.tags()), p.version(), p.createdAt(), p.updatedAt(), p.publishedAt(),
+                p.coverImageUrl());
     }
 
     @Override
@@ -128,7 +129,8 @@ public class InMemoryStore implements UserRepository, PostRepository, CommentRep
             throw new DuplicateException("slug");
         }
         Post stored = new Post(++postIds, post.slug(), post.authorId(), "", post.title(), post.body(), post.status(),
-                post.tags().stream().sorted().toList(), 1, post.createdAt(), post.updatedAt(), post.publishedAt());
+                post.tags().stream().sorted().toList(), 1, post.createdAt(), post.updatedAt(), post.publishedAt(),
+                post.coverImageUrl());
         posts.put(stored.id(), stored);
         return withAuthor(stored);
     }
@@ -147,7 +149,7 @@ public class InMemoryStore implements UserRepository, PostRepository, CommentRep
         }
         Post stored = new Post(post.id(), post.slug(), post.authorId(), "", post.title(), post.body(), post.status(),
                 post.tags().stream().sorted().toList(), current.version() + 1, current.createdAt(), post.updatedAt(),
-                post.publishedAt());
+                post.publishedAt(), post.coverImageUrl());
         posts.put(post.id(), stored);
         return Optional.of(withAuthor(stored));
     }

@@ -5,6 +5,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import org.aicancode.devblog.domain.Models.Post;
 import org.aicancode.devblog.domain.Times;
+import org.aicancode.devblog.metrics.Metrics;
 import org.aicancode.devblog.service.AuthService;
 import org.aicancode.devblog.service.PostService;
 import org.springframework.http.ResponseEntity;
@@ -26,8 +27,10 @@ public class PostController {
     private final AuthService auth;
     private final PostService posts;
     private final java.time.Clock clock;
+    private final Metrics metrics;
 
-    public PostController(AuthService auth, PostService posts, java.time.Clock clock) {
+    public PostController(AuthService auth, PostService posts, java.time.Clock clock, Metrics metrics) {
+        this.metrics = metrics;
         this.auth = auth;
         this.posts = posts;
         this.clock = clock;
@@ -75,6 +78,9 @@ public class PostController {
     public Map<String, Object> summary(@PathVariable String slug,
                                        @RequestHeader(value = AUTH, required = false) String authorization) {
         PostService.Summary s = posts.summary(auth.optional(authorization), slug);
+        if (s.result().fallback()) {
+            metrics.inc(Metrics.AI_FALLBACK);
+        }
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("slug", s.post().slug());
         body.put("provider", s.result().provider());

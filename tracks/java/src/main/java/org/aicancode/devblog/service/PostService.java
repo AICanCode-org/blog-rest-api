@@ -14,6 +14,7 @@ import org.aicancode.devblog.domain.Models.TagCount;
 import org.aicancode.devblog.domain.Text;
 import org.aicancode.devblog.domain.Times;
 import org.aicancode.devblog.domain.Validation;
+import org.aicancode.devblog.metrics.Metrics;
 import org.aicancode.devblog.repo.PostRepository;
 
 /** Posts: drafts, publishing, ownership, optimistic locking, soft delete, the feed and tags. */
@@ -24,11 +25,17 @@ public class PostService {
     private final PostRepository posts;
     private final Clock clock;
     private final SummaryService summaries;
+    private final Metrics metrics;
 
     public PostService(PostRepository posts, Clock clock, SummaryService summaries) {
+        this(posts, clock, summaries, new Metrics());
+    }
+
+    public PostService(PostRepository posts, Clock clock, SummaryService summaries, Metrics metrics) {
         this.posts = posts;
         this.clock = clock;
         this.summaries = summaries;
+        this.metrics = metrics;
     }
 
     public record Page(List<Post> items, String nextCursor) {
@@ -53,15 +60,20 @@ public class PostService {
         String body = Validation.body(data.get("body"));
         List<String> tags = Validation.tags(data.get("tags"));
         String status = Validation.status(data.get("status"), "draft");
+        String cover = Validation.coverImageUrl(data.get("coverImageUrl"));
         Instant now = Times.now(clock);
         String base = Text.slugify(title);
         for (int attempt = 1; attempt <= MAX_SLUG_ATTEMPTS; attempt++) {
             String slug = attempt == 1 ? base : base + "-" + attempt;
             Post draft = new Post(0, slug, principal.userId(), "", title, body, status, tags, 1, now, now,
-                    "published".equals(status) ? now : null);
+                    "published".equals(status) ? now : null, cover);
             try {
                 // Insert and let the unique constraint decide: "check, then insert" would race.
-                return posts.insertPost(draft);
+                Post created = posts.insertPost(draft);
+                if ("published".equals(created.status())) {
+                    metrics.inc(Metrics.POSTS_PUBLISHED);
+                }
+                return created;
             } catch (DuplicateException ignored) {
                 // slug taken: try the next suffix
             }
@@ -81,8 +93,8 @@ public class PostService {
     public Post update(Principal principal, String slug, Object payload) {
         Map<String, Object> data = Validation.requireObject(payload);
         int expected = Validation.version(data.get("version"));
-        if (List.of("title", "body", "tags", "status").stream().noneMatch(data::containsKey)) {
-            throw ApiException.validation("nothing to update: send title, body, tags or status");
+        if (List.of("title", "body", "tags", "status", "coverImageUrl").stream().noneMatch(data::containsKey)) {
+            throw ApiException.validation("nothing to update: send title, body, tags, status or coverImageUrl");
         }
         Post post = get(principal, slug);
         if (!canEdit(principal, post)) {
@@ -93,12 +105,18 @@ public class PostService {
         String body = data.containsKey("body") ? Validation.body(data.get("body")) : post.body();
         List<String> tags = data.containsKey("tags") ? Validation.tags(data.get("tags")) : post.tags();
         String status = data.containsKey("status") ? Validation.status(data.get("status"), null) : post.status();
+        String cover = data.containsKey("coverImageUrl") ? Validation.coverImageUrl(data.get("coverImageUrl"))
+                : post.coverImageUrl();
         Instant now = Times.now(clock);
         // first publication sets publishedAt; re-publishing keeps the date
         Instant publishedAt = "published".equals(status) && post.publishedAt() == null ? now : post.publishedAt();
         Post changed = new Post(post.id(), post.slug(), post.authorId(), post.authorName(), title, body, status, tags,
-                post.version(), post.createdAt(), now, publishedAt);
-        return posts.updatePost(changed, expected).orElseThrow(() -> ApiException.versionConflict(post.version()));
+                post.version(), post.createdAt(), now, publishedAt, cover);
+        Post saved = posts.updatePost(changed, expected).orElseThrow(() -> ApiException.versionConflict(post.version()));
+        if (post.publishedAt() == null && saved.publishedAt() != null) {
+            metrics.inc(Metrics.POSTS_PUBLISHED);
+        }
+        return saved;
     }
 
     public void delete(Principal principal, String slug) {

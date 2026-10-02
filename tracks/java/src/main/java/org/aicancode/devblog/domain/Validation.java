@@ -116,6 +116,21 @@ public final class Validation {
     }
 
     /** In a create a missing status means "draft"; in a PATCH (fallback null) an explicit null is an error. */
+    private static final java.util.regex.Pattern COVER_URL =
+            java.util.regex.Pattern.compile("^[Hh][Tt][Tt][Pp][Ss]?://[A-Za-z0-9.-]+(:[0-9]{1,5})?([/?#]\\S*)?$");
+    public static final int MAX_COVER_URL = 2048;
+
+    /** v1.1: optional. null clears it. Only absolute http(s) URLs: no javascript:, data: or file: tricks. */
+    public static String coverImageUrl(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (!(value instanceof String s) || s.codePointCount(0, s.length()) > MAX_COVER_URL || !COVER_URL.matcher(s).matches()) {
+            throw ApiException.validation("coverImageUrl must be an http(s) URL of at most 2048 characters");
+        }
+        return s;
+    }
+
     public static String status(Object value, String fallback) {
         if (value == null && fallback != null) {
             return fallback;

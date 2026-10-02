@@ -15,7 +15,10 @@ import org.aicancode.devblog.security.TokenService;
 import org.aicancode.devblog.service.AuthService;
 import org.aicancode.devblog.service.CommentService;
 import org.aicancode.devblog.service.PostService;
+import org.aicancode.devblog.metrics.Metrics;
 import org.aicancode.devblog.web.AuthController;
+import org.aicancode.devblog.web.MetricsController;
+import org.aicancode.devblog.web.RequestIdFilter;
 import org.aicancode.devblog.web.CommentController;
 import org.aicancode.devblog.web.HealthController;
 import org.aicancode.devblog.web.PostController;
@@ -43,13 +46,23 @@ public class TestApp {
     public final MockMvc mvc;
     private int n;
 
+    public final Metrics metrics;
+
     public TestApp() {
+        this(new ModerationService(new RuleModerator(), null), new SummaryService(new TemplateSummarizer(), null),
+                new Metrics());
+    }
+
+    /** The real controllers on in-memory adapters; pass other AI services to test fallbacks (v1.1). */
+    public TestApp(ModerationService moderation, SummaryService summaries, Metrics metrics) {
+        this.metrics = metrics;
         AuthService auth = auth(store, clock);
         auth.ensureAdmin("admin@devblog.test", "admin-password");
-        PostService posts = new PostService(store, clock, new SummaryService(new TemplateSummarizer(), null));
-        CommentService comments = new CommentService(store, store, new ModerationService(new RuleModerator(), null), clock);
-        mvc = MockMvcBuilders.standaloneSetup(new AuthController(auth), new PostController(auth, posts, clock),
-                        new CommentController(auth, comments), new HealthController(auth))
+        PostService posts = new PostService(store, clock, summaries, metrics);
+        CommentService comments = new CommentService(store, store, moderation, clock, metrics);
+        mvc = MockMvcBuilders.standaloneSetup(new AuthController(auth, metrics), new PostController(auth, posts, clock, metrics),
+                        new CommentController(auth, comments), new HealthController(auth), new MetricsController(metrics))
+                .addFilters(new RequestIdFilter())
                 .setControllerAdvice(new ProblemHandler())
                 .build();
     }
@@ -78,7 +91,8 @@ public class TestApp {
             }
             MockHttpServletResponse r = mvc.perform(b).andReturn().getResponse();
             String text = r.getContentAsString();
-            return new Res(r.getStatus(), r, text.isEmpty() ? null : JSON.readTree(text));
+            boolean json = r.getContentType() != null && r.getContentType().contains("json");
+            return new Res(r.getStatus(), r, text.isEmpty() || !json ? null : JSON.readTree(text));
         } catch (Exception e) {
             throw new IllegalStateException(e);
         }

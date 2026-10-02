@@ -26,7 +26,7 @@ class ApiPostsTest {
                 + "\"title\":\"Hello DevBlog\",\"body\":\"First post. It has two sentences.\",\"status\":\"draft\","
                 + "\"tags\":[\"java\"],\"author\":{\"id\":" + ada.get("user").get("id").asLong() + ",\"displayName\":\"Ada\"},"
                 + "\"createdAt\":\"2026-10-02T09:30:00.000Z\",\"updatedAt\":\"2026-10-02T09:30:00.000Z\","
-                + "\"publishedAt\":null,\"version\":1}");
+                + "\"publishedAt\":null,\"coverImageUrl\":null,\"version\":1}");
     }
 
     @Test

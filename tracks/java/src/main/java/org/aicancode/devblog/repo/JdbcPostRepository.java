@@ -22,7 +22,7 @@ public class JdbcPostRepository implements PostRepository {
 
     static final String POST_SELECT = """
             SELECT p.id, p.slug, p.author_id, u.display_name AS author_name, p.title, p.body, p.status, p.version,
-                   p.created_at, p.updated_at, p.published_at,
+                   p.created_at, p.updated_at, p.published_at, p.cover_image_url,
                    ARRAY(SELECT t.name FROM post_tags pt JOIN tags t ON t.id = pt.tag_id
                          WHERE pt.post_id = p.id ORDER BY t.name) AS tags
             FROM posts p JOIN users u ON u.id = p.author_id
@@ -46,7 +46,8 @@ public class JdbcPostRepository implements PostRepository {
         return new Post(rs.getLong("id"), rs.getString("slug"), rs.getLong("author_id"), rs.getString("author_name"),
                 rs.getString("title"), rs.getString("body"), rs.getString("status"), List.copyOf(tagList),
                 rs.getInt("version"), JdbcUserRepository.instant(rs, "created_at"),
-                JdbcUserRepository.instant(rs, "updated_at"), JdbcUserRepository.instant(rs, "published_at"));
+                JdbcUserRepository.instant(rs, "updated_at"), JdbcUserRepository.instant(rs, "published_at"),
+                rs.getString("cover_image_url"));
     }
 
     private Optional<Post> byId(long id) {
@@ -68,9 +69,9 @@ public class JdbcPostRepository implements PostRepository {
         try {
             return tx.execute(status -> {
                 long id = jdbc.sql("INSERT INTO posts (slug, author_id, title, body, status, created_at, updated_at, "
-                                + "published_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id")
+                                + "published_at, cover_image_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id")
                         .params(post.slug(), post.authorId(), post.title(), post.body(), post.status(),
-                                ts(post.createdAt()), ts(post.updatedAt()), ts(post.publishedAt()))
+                                ts(post.createdAt()), ts(post.updatedAt()), ts(post.publishedAt()), post.coverImageUrl())
                         .query(Long.class).single();
                 replaceTags(id, post.tags());
                 return byId(id).orElseThrow();
@@ -91,9 +92,9 @@ public class JdbcPostRepository implements PostRepository {
         return tx.execute(status -> {
             // Optimistic locking: the WHERE clause only matches if nobody saved in between.
             int rows = jdbc.sql("UPDATE posts SET title = ?, body = ?, status = ?, published_at = ?, updated_at = ?, "
-                            + "version = version + 1 WHERE id = ? AND version = ? AND deleted_at IS NULL")
+                            + "cover_image_url = ?, version = version + 1 WHERE id = ? AND version = ? AND deleted_at IS NULL")
                     .params(post.title(), post.body(), post.status(), ts(post.publishedAt()), ts(post.updatedAt()),
-                            post.id(), expectedVersion)
+                            post.coverImageUrl(), post.id(), expectedVersion)
                     .update();
             if (rows != 1) {
                 return Optional.<Post>empty();

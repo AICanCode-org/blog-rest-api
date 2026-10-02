@@ -157,7 +157,7 @@ class FeedTest {
         assertThat(first.get("items").get(1).get("title").asString()).isEqualTo("Post 1");
         JsonNode item = first.get("items").get(0);
         assertThat(item.propertyNames()).containsExactlyInAnyOrder("id", "slug", "title", "excerpt", "tags", "author",
-                "publishedAt");
+                "publishedAt", "coverImageUrl");
         assertThat(item.get("author").toString())
                 .isEqualTo("{\"id\":" + ada.get("user").get("id").asLong() + ",\"displayName\":\"Ada\"}");
         assertThat(item.get("excerpt").asString()).hasSizeLessThanOrEqualTo(160).endsWith("...");

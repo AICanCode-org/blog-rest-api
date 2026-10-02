@@ -11,6 +11,7 @@ import org.aicancode.devblog.domain.Models.Post;
 import org.aicancode.devblog.domain.Models.Principal;
 import org.aicancode.devblog.domain.Times;
 import org.aicancode.devblog.domain.Validation;
+import org.aicancode.devblog.metrics.Metrics;
 import org.aicancode.devblog.repo.CommentRepository;
 import org.aicancode.devblog.repo.PostRepository;
 
@@ -21,8 +22,15 @@ public class CommentService {
     private final PostRepository posts;
     private final ModerationService moderation;
     private final Clock clock;
+    private final Metrics metrics;
 
     public CommentService(CommentRepository comments, PostRepository posts, ModerationService moderation, Clock clock) {
+        this(comments, posts, moderation, clock, new Metrics());
+    }
+
+    public CommentService(CommentRepository comments, PostRepository posts, ModerationService moderation, Clock clock,
+                          Metrics metrics) {
+        this.metrics = metrics;
         this.comments = comments;
         this.posts = posts;
         this.moderation = moderation;
@@ -48,8 +56,16 @@ public class CommentService {
         }
         Moderation verdict = moderation.moderate(body);
         String status = ModerationService.shouldHold(verdict) ? "held" : "visible";
-        return comments.insertComment(new Comment(0, post.id(), post.slug(), principal.userId(), "", parentId, body,
-                status, verdict, Times.now(clock), null, null));
+        Comment saved = comments.insertComment(new Comment(0, post.id(), post.slug(), principal.userId(), "", parentId,
+                body, status, verdict, Times.now(clock), null, null));
+        metrics.inc(Metrics.COMMENTS_CREATED);
+        if ("held".equals(status)) {
+            metrics.inc(Metrics.COMMENTS_HELD);
+        }
+        if (verdict.fallback()) {
+            metrics.inc(Metrics.AI_FALLBACK);
+        }
+        return saved;
     }
 
     public List<Comment> list(String slug) {

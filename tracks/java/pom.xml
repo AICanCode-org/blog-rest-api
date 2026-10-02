@@ -13,7 +13,7 @@
 
     <groupId>org.aicancode</groupId>
     <artifactId>devblog-java</artifactId>
-    <version>1.0.0</version>
+    <version>1.1.0</version>
     <name>DevBlog (Java track)</name>
     <description>DevBlog secure blog REST API - Java 21 / Spring Boot track (AiCanCode)</description>
 

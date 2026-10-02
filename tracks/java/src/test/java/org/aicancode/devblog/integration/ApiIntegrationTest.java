@@ -129,7 +129,7 @@ class ApiIntegrationTest {
         assertThat(send("GET", "/health", null, null).json().toString())
                 .isEqualTo("{\"status\":\"UP\",\"checks\":{\"database\":\"UP\"}}");
         assertThat(jdbcClient.sql("SELECT version FROM schema_migrations ORDER BY version").query(Integer.class).list())
-                .startsWith(1);
+                .startsWith(1, 2);
     }
 
     @Test
@@ -261,6 +261,17 @@ class ApiIntegrationTest {
                 .sql("SELECT status, moderated_by IS NOT NULL AS moderated FROM comments WHERE id = ?")
                 .param(held.get("id").asLong()).query().singleRow();
         assertThat(row).containsEntry("status", "rejected").containsEntry("moderated", true);
+    }
+
+    @Test
+    void coverImageUrlIsStoredByTheV2Migration() throws Exception {
+        JsonNode author = makeUser("ada@devblog.test", "AUTHOR");
+        String cover = "https://img.example/c.png";
+        String slug = createPost(author, Map.of("title", "Cover", "body", "b", "status", "published", "coverImageUrl", cover));
+        assertThat(jdbcClient.sql("SELECT cover_image_url FROM posts WHERE slug = ?").param(slug).query(String.class).single())
+                .isEqualTo(cover);
+        assertThat(send("GET", "/api/v1/posts", null, null).json().get("items").get(0).get("coverImageUrl").asString())
+                .isEqualTo(cover);
     }
 
     @Test
