@@ -107,3 +107,22 @@ Cursor, Claude, a local Ollama model, ...) produced something you kept, changed 
   lists only `ci.yml`.
 * **Time saved / lost (honest guess):** neutral.
 * **What I learned:** consistency across sibling projects is a feature for learners, not just for maintainers.
+
+### 2026-10-02 · Phase 7 · A game-day result that was too good to be true
+* **Tool / model:** AI coding agent (shell)
+* **Prompt (summary):**
+  > Write a game-day script: a fake OpenAI-compatible LLM that either answers or hangs, point the app at it, and measure comment latency before, during and after the fault.
+* **What it produced:** `scripts/game-day.sh` with a 15-line Python fake LLM (`MODE=ok` / `MODE=hang`)
+  started on the Compose network, four phases and a `/metrics` report.
+* **What I kept / changed / rejected and why:** kept the script, rejected its first result. The "v1.0.0"
+  run showed `devblog_llm_short_circuits_total` rising, but v1.0.0 has no `/metrics` and no circuit
+  breaker. The image tag `devblog-python:local` had been rebuilt from v1.1 by another build on the same
+  machine between my `up --build` and the game day. Re-ran everything from clean `git worktree`s of the
+  tags, one compose project per tag, sequentially.
+* **How I verified it:** v1.0.0 now prints "no /metrics before v1.1" and every hung comment waits ≈ 5 s;
+  v1.1.0 shows 3 slow comments then 7 short-circuits in all three tracks. A single 15.2 s comment in the
+  Python v1.0.0 run did not reproduce in a targeted re-run; it is an open action item in the post-mortem
+  rather than a guessed explanation.
+* **Time saved / lost (honest guess):** lost ~10 min to the bad run; it would have been far worse to publish its numbers.
+* **What I learned:** before interpreting a measurement, check that you measured the thing you think you
+  did. A mutable tag like `:local` is not a version.

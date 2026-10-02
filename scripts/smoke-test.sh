@@ -179,6 +179,17 @@ else
   expect 404 "a deleted post is 404"
 fi
 
+# ---- v1.1 observability (Phase 7) ----
+HEADERS="$(curl -s -o /dev/null -D - -H 'X-Request-ID: smoke-req-1' "$BASE_URL/health" | tr -d '\r')"
+[ "$(header X-Request-ID)" = "smoke-req-1" ] && ok "X-Request-ID is echoed (v1.1)" || bad "X-Request-ID is echoed (v1.1)"
+HEADERS="$(curl -s -o /dev/null -D - -H 'X-Request-ID: bad id with spaces' "$BASE_URL/health" | tr -d '\r')"
+RID="$(header X-Request-ID)"
+[ -n "$RID" ] && [ "$RID" != "bad id with spaces" ] && ok "an unsafe X-Request-ID is replaced (v1.1)" || bad "an unsafe X-Request-ID is replaced (v1.1)"
+request GET /metrics
+expect 200 "GET /metrics (v1.1)"
+REGISTERED="$(sed -n 's/^devblog_users_registered_total \([0-9][0-9]*\)$/\1/p' "$TMP")"
+[ "${REGISTERED:-0}" -ge 1 ] 2>/dev/null && ok "devblog_users_registered_total=$REGISTERED" || bad "devblog_users_registered_total >= 1"
+# ---- end v1.1 ----
 
 echo
 echo "Result: $PASS passed, $FAIL failed, $SKIP skipped"

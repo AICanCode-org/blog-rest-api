@@ -6,6 +6,19 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-02
+### Added
+- Request IDs: `X-Request-ID` is validated (or generated), echoed on every response and included in every log line.
+- Structured JSON logs (Logstash JSON in Java, a JSON formatter in Python, pino in TypeScript), one access line per request.
+- `GET /metrics` (Prometheus text): users registered, failed logins, posts published, comments created and
+  held, AI fallbacks, LLM short-circuits. Same names in every track.
+- LLM circuit breaker shared by moderation and summaries: 3 failures in a row open it for 30 s, then one
+  half-open trial. A hanging LLM now costs three slow comments instead of every comment.
+- Optional `coverImageUrl` on posts (absolute http(s) URL, `null` clears it), OpenAPI 1.1.0, migration
+  `V2__post_cover_image.sql` (nullable, so v1.0.0 keeps working against the new schema).
+- `scripts/game-day.sh` (fake LLM that hangs) and `docs/postmortem-2026-10-02-llm-hang.md`.
+- Smoke test: request-ID and `/metrics` checks (57 checks; 59 with `EXPECT_FALLBACK=true`).
+
 ## [1.0.0] - 2026-10-02
 ### Added
 - Requirements (FR-1..15, NFR-1..8, threats T1..T9), architecture diagrams, ADRs 0001-0005,
