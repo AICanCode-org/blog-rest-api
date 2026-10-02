@@ -3,6 +3,79 @@
 [![CI](https://github.com/AICanCode-org/blog-rest-api/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/AICanCode-org/blog-rest-api/actions/workflows/ci.yml)
 [![CI (solution)](https://github.com/AICanCode-org/blog-rest-api/actions/workflows/ci.yml/badge.svg?branch=solution)](https://github.com/AICanCode-org/blog-rest-api/actions/workflows/ci.yml?query=branch%3Asolution)
 
+## Case study (reference solution)
+
+> **DevBlog is the backend of a multi-author blog with real authentication, role- and ownership-based
+> access, and AI comment moderation that can only ever hold a comment for a human. It is built three
+> times, in Java, Python and TypeScript, against one contract.**
+
+```console
+$ curl -s -X POST localhost:8080/api/v1/auth/register -H 'Content-Type: application/json' \
+    -d '{"email":"meera@example.com","password":"correct-horse-42","displayName":"Meera","role":"ADMIN"}'
+{"id":2,"email":"meera@example.com","displayName":"Meera","role":"READER", ...}      # role ignored
+$ curl -s -X POST localhost:8080/api/v1/auth/refresh -H 'Content-Type: application/json' -d "{\"refreshToken\":\"$OLD\"}"
+{"type":"https://devblog.example/problems/unauthorized","title":"Unauthorized","status":401, ...}  # reuse: family revoked
+$ curl -s -X POST localhost:8080/api/v1/posts/hello-devblog/comments -H "Authorization: Bearer $TOKEN" \
+    -H 'Content-Type: application/json' -d '{"body":"Buy now! Free money at http://spam.example"}'
+{"id":7, ... "status":"held","moderation":{"label":"spam","confidence":0.9,"provider":"rules","fallback":false, ...}}
+```
+
+**Problem → solution.** Most blog-API tutorials stop at "JWT works" and leave the dangerous parts out:
+token theft, privilege escalation through the request body, other people's drafts, lost edits, and an
+AI that silently deletes comments. DevBlog handles each of them on purpose and proves it with tests:
+bcrypt, 15-minute HS256 access tokens with the algorithm pinned, opaque refresh tokens that rotate on
+every use and revoke the whole session family when an old one is replayed, drafts that are `404` for
+everyone but their author, optimistic locking, keyset pagination and PostgreSQL full-text search. It
+runs on a laptop with one command and needs no API key.
+
+**Architecture.** One stateless API container per track and PostgreSQL as the only stateful component:
+see the diagrams in [`spec/architecture.md`](spec/architecture.md). Three decisions worth discussing:
+1. Short-lived JWTs plus **rotating, hashed refresh tokens with reuse detection** instead of long-lived
+   JWTs or server sessions ([ADR-0001](spec/adr/0001-auth-jwt-and-rotating-refresh-tokens.md)). Rotation is
+   a compare-and-set in SQL, so two concurrent refreshes with one token cannot both win.
+2. **Keyset pagination** with an opaque cursor instead of `OFFSET`: stable pages while authors publish,
+   and the same cost for the first and the hundredth page ([ADR-0002](spec/adr/0002-keyset-pagination.md)).
+3. **AI moderation with a human in the loop**: a model (or the offline rules) may only *hold* a comment;
+   only an admin can reject it, and any LLM error or odd answer falls back to the rules
+   ([ADR-0004](spec/adr/0004-ai-moderation-human-in-the-loop.md)).
+
+**Security and quality evidence (v1.1.0, measured on the maintainers' Linux build box with Docker).**
+
+| | Java 21 / Spring Boot | Python / FastAPI | TypeScript / Fastify |
+|---|---|---|---|
+| Tests (unit + integration) | 154 unit + 13 integration | 186 unit + 13 integration | 183 unit + 13 integration |
+| Line coverage (gate 85 %) | 96.75 % (JaCoCo) | 99.09 % (coverage.py) | 97.91 % (V8) |
+| Docker smoke test (`scripts/smoke-test.sh`) | 57/57 (+ 59/59 with the LLM unreachable) | 57/57 (+ 59/59) | 57/57 (+ 59/59) |
+
+Each threat in [`spec/requirements.md`](spec/requirements.md) (T1–T9: stolen refresh tokens, `role`
+mass assignment, other people's drafts, forged `alg`, account enumeration, lost updates, spam and prompt
+injection, oversized input) maps to unit and integration tests, and the black-box smoke test re-checks
+the most important ones against every Docker image. Every phase tag (`phase-0-end` … `phase-8-end`)
+builds and passes the tests of all three tracks (`scripts/verify-tags.sh`). CI runs lint, unit and
+integration tests against a PostgreSQL service container, a coverage gate, a CMS-export check and a
+Docker smoke test per track. Release tags publish images to GHCR.
+
+**Operations.** `/health` checks the database. `/metrics` exposes seven Prometheus counters (failed
+logins, held comments, AI fallbacks, LLM short-circuits, …), and every log line is JSON with the
+request's `X-Request-ID`. A **game day** made the LLM hang: comments kept working through the offline
+rules, but in v1.0.0 each one waited the full 5 s timeout, and in the Python track 50 concurrent
+comments slowed even `/health` to 4 s. A circuit breaker fixed it in v1.1.0 (10 comments during the
+fault: avg ≈ 1.5 s, three wait for the timeout and seven answer in milliseconds):
+[post-mortem](docs/postmortem-2026-10-02-llm-hang.md), [runbook](docs/runbook.md).
+
+**How AI was used.** Assistants drafted the starter stubs, Dockerfiles, workflow skeletons, test
+scaffolding, the game-day fake LLM and first versions of docs. Their output needed the strictest review
+exactly where it mattered: hints attached to the wrong method, a greedy regex that would have read the
+wrong `id` in the smoke test, and version-specific framework details. Every suggestion was verified by
+tests, `actionlint`, the smoke test or official documentation, and logged in [`AI_LOG.md`](AI_LOG.md).
+See also [`docs/retrospective.md`](docs/retrospective.md).
+
+**What I'd do next.** Rate limiting on login (the failed-login counter shows credential stuffing but
+does not stop it); a hanging-LLM game day in CI with a latency assertion; an async LLM client or a
+bulkhead in the Python track; e-mail verification and password reset; OpenTelemetry tracing.
+
+---
+
 DevBlog is a guided project from **[AiCanCode](https://www.aicancode.org)**. Over 9 phases (about 33
 hours) you build the backend of a multi-author blog like a professional team would: requirements and
 threats, design, a test-first implementation, CI/CD, containers, observability and a retrospective.
