@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: DevBlog API
-  version: 1.0.0
+  version: 1.1.0
   summary: A secure blogging backend with JWT auth, roles, comments and AI moderation (AiCanCode course project).
   description: |
     The shared HTTP contract for the Java, Python and TypeScript tracks. All three implement exactly
@@ -11,6 +11,8 @@ info:
     * Timestamps are ISO-8601 UTC with millisecond precision and a `Z` suffix.
     * Authenticated endpoints need `Authorization: Bearer <accessToken>` (a JWT, HS256, 15 minutes).
     * Roles: `READER` (default at registration), `AUTHOR` (may write posts), `ADMIN` (everything).
+    * v1.1.0: every response carries `X-Request-ID` (a safe incoming value is echoed, otherwise a UUID);
+      `GET /metrics`; optional `coverImageUrl` on posts (V2 migration).
   license:
     name: MIT
     identifier: MIT
@@ -42,6 +44,22 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Health" }
+
+  /metrics:
+    get:
+      tags: [ops]
+      summary: Prometheus counters (v1.1.0)
+      operationId: metrics
+      responses:
+        "200":
+          description: Prometheus text exposition format 0.0.4. Counter names are the same in every track.
+          content:
+            text/plain:
+              schema: { type: string }
+              example: |
+                # HELP devblog_comments_held_total Comments the moderator put on hold for a human.
+                # TYPE devblog_comments_held_total counter
+                devblog_comments_held_total 3
 
   /api/v1/auth/register:
     post:
@@ -544,6 +562,7 @@ components:
         body: { type: string, minLength: 1, maxLength: 50000, description: "Markdown, stored as-is" }
         tags: { $ref: "#/components/schemas/Tags" }
         status: { type: string, enum: [draft, published], default: draft }
+        coverImageUrl: { type: [string, "null"], maxLength: 2048, pattern: "^[Hh][Tt][Tt][Pp][Ss]?://[A-Za-z0-9.-]+(:[0-9]{1,5})?([/?#]\\S*)?$", description: "v1.1.0: absolute http(s) URL; null clears it" }
 
     UpdatePostRequest:
       type: object
@@ -556,10 +575,11 @@ components:
         body: { type: string, minLength: 1, maxLength: 50000 }
         tags: { $ref: "#/components/schemas/Tags" }
         status: { type: string, enum: [draft, published] }
+        coverImageUrl: { type: [string, "null"], maxLength: 2048, pattern: "^[Hh][Tt][Tt][Pp][Ss]?://[A-Za-z0-9.-]+(:[0-9]{1,5})?([/?#]\\S*)?$", description: "v1.1.0: absolute http(s) URL; null clears it" }
 
     Post:
       type: object
-      required: [id, slug, title, body, status, tags, author, createdAt, updatedAt, publishedAt, version]
+      required: [id, slug, title, body, status, tags, author, createdAt, updatedAt, publishedAt, coverImageUrl, version]
       properties:
         id: { type: integer }
         slug: { type: string }
@@ -571,11 +591,12 @@ components:
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
         publishedAt: { type: [string, "null"], format: date-time, description: "Set the first time the post is published" }
+        coverImageUrl: { type: [string, "null"], description: "v1.1.0" }
         version: { type: integer }
 
     PostListItem:
       type: object
-      required: [id, slug, title, excerpt, tags, author, publishedAt]
+      required: [id, slug, title, excerpt, tags, author, publishedAt, coverImageUrl]
       properties:
         id: { type: integer }
         slug: { type: string }
@@ -584,6 +605,7 @@ components:
         tags: { $ref: "#/components/schemas/Tags" }
         author: { $ref: "#/components/schemas/AuthorRef" }
         publishedAt: { type: string, format: date-time }
+        coverImageUrl: { type: [string, "null"], description: "v1.1.0" }
 
     PostPage:
       type: object
