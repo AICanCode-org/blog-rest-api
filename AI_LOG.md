@@ -77,3 +77,33 @@ Cursor, Claude, a local Ollama model, ...) produced something you kept, changed 
   of that class; lint and the always-on tests pass in all three starters.
 * **Time saved / lost (honest guess):** generation saved hours; the review took 20 minutes and was essential.
 * **What I learned:** generated text keyed by a short name collides silently. Review the output, not the generator.
+
+### 2026-10-02 · Phase 6 · Porting the smoke test from another project
+* **Tool / model:** AI coding agent
+* **Prompt (summary):**
+  > Adapt our URL-shortener smoke test (bash + curl only) to DevBlog: registration, login, refresh rotation and reuse detection, roles, drafts, optimistic locking, search, comments, moderation queue.
+* **What it produced:** a 53-check script. Reviewing the helpers it was about to copy turned up a bug
+  that SnapLink never hit: `sed -n 's/.*"code":"\([^"]*\)".*/\1/p'` is greedy (`.*` matches as much as it
+  can), so on a one-line JSON body it returns the **last** match of a key.
+* **What I kept / changed / rejected and why:** in a DevBlog post the last `"id"` is `author.id`, not the
+  post's id, so the moderation-queue check would have looked for the wrong comment. The helpers now use
+  `grep -o … | head -1` (first occurrence). `shellcheck --severity=error` then flagged `$HELD_ID[,}]` in a
+  regex (SC1087, parsed as an array); fixed with `${HELD_ID}`. Also checked that the script is safe to
+  re-run: every user, tag and search word carries a unique run id.
+* **How I verified it:** the script against the v1.0 images of all three tracks: 53/53 passed, and 55/55
+  with `AI_PROVIDER=llm` pointing at an unreachable address and `EXPECT_FALLBACK=true`.
+* **Time saved / lost (honest guess):** saved ~1 h; the greedy-regex bug would have cost more than that if it had shipped.
+* **What I learned:** copying a helper copies its assumptions. SnapLink's JSON had no nested ids; DevBlog's does.
+
+### 2026-10-02 · Phase 6 · Where should `deploy.yml` live?
+* **Tool / model:** AI coding agent
+* **Prompt (summary):**
+  > Should the deploy workflow already be on `main` (the starter) so students see it early?
+* **What it produced:** a version that lived on `main` and skipped tracks without a Dockerfile with a notice.
+* **What I kept / changed / rejected and why:** rejected for the course. Students write `deploy.yml`
+  themselves in Phase 6, the sibling project (SnapLink) keeps it on `solution` only, and a workflow that
+  exists but does nothing on `main` is confusing. The file now arrives with the Dockerfiles at `phase-6-end`.
+* **How I verified it:** `actionlint` (with shellcheck) on every workflow; `git ls-tree main .github/workflows`
+  lists only `ci.yml`.
+* **Time saved / lost (honest guess):** neutral.
+* **What I learned:** consistency across sibling projects is a feature for learners, not just for maintainers.
