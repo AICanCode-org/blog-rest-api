@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import re
 
-from .errors import validation_error
+from .errors import not_found, validation_error
+from .models import ROLES
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 TAG_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
@@ -31,92 +32,127 @@ def require_object(payload: object) -> dict:
 
 
 def email(value: object) -> str:
-    # TODO(phase-3 M1): string, trimmed and lower-cased, at most 254 characters, must match EMAIL_RE.
-    # Exact messages: see the validation tests.
-    raise NotImplementedError("TODO(phase-3 M1): email")
+    if not isinstance(value, str):
+        raise validation_error("email is required")
+    normalised = value.strip().lower()
+    if len(normalised) > 254 or not EMAIL_RE.match(normalised):
+        raise validation_error("email must be a valid e-mail address")
+    return normalised
 
 
 def password(value: object) -> str:
-    # TODO(phase-3 M1): string of at least 8 characters and at most 72 BYTES in UTF-8 (bcrypt ignores the
-    # rest). Do not trim.
-    raise NotImplementedError("TODO(phase-3 M1): password")
+    if not isinstance(value, str) or len(value) < 8 or len(value.encode("utf-8")) > 72:
+        raise validation_error("password must be 8 characters to 72 bytes")
+    return value
 
 
 def display_name(value: object) -> str:
-    # TODO(phase-3 M1): string, trimmed, 1..50 characters (code points, not UTF-16 units).
-    raise NotImplementedError("TODO(phase-3 M1): display_name")
+    if not isinstance(value, str) or not 1 <= len(value.strip()) <= 50:
+        raise validation_error("displayName must be 1-50 characters")
+    return value.strip()
 
 
 def role(value: object) -> str:
-    # TODO(phase-3 M1): one of READER, AUTHOR, ADMIN (exact case).
-    raise NotImplementedError("TODO(phase-3 M1): role")
+    if value not in ROLES:
+        raise validation_error("role must be one of READER, AUTHOR, ADMIN")
+    return value  # type: ignore[return-value]
 
 
 def title(value: object) -> str:
-    # TODO(phase-3 M1): string, trimmed, 1..200 characters.
-    raise NotImplementedError("TODO(phase-3 M1): title")
+    if not isinstance(value, str) or not 1 <= len(value.strip()) <= 200:
+        raise validation_error("title must be 1-200 characters")
+    return value.strip()
 
 
 def body(value: object) -> str:
-    # TODO(phase-3 M1): string, not blank, at most 50 000 characters. Stored as-is (Markdown): no
-    # trimming.
-    raise NotImplementedError("TODO(phase-3 M1): body")
+    if not isinstance(value, str) or not value.strip() or len(value) > MAX_BODY:
+        raise validation_error("body must be 1-50000 characters")
+    return value
 
 
 def tags(value: object) -> list[str]:
-    # TODO(phase-3 M1): missing/null -> []. A list of strings; trim + lower-case each, de-duplicate
-    #   and sort, then at most 5 and each must match TAG_RE with at most 30 characters.
-    raise NotImplementedError("TODO(phase-3 M1): tags")
+    if value is None:
+        return []
+    if not isinstance(value, list) or not all(isinstance(t, str) for t in value):
+        raise validation_error("tags must be an array of strings")
+    cleaned = sorted({t.strip().lower() for t in value})
+    if len(cleaned) > MAX_TAGS:
+        raise validation_error("at most 5 tags")
+    for t in cleaned:
+        if len(t) > 30 or not TAG_RE.match(t):
+            raise validation_error("tags must be lower-case letters, digits and single hyphens (max 30)")
+    return cleaned
 
 
 def status(value: object, default: str | None = "draft") -> str:
-    # TODO(phase-3 M1): missing/null -> the default ('draft' on create); otherwise 'draft' or 'published'.
-    raise NotImplementedError("TODO(phase-3 M1): status")
+    if value is None and default is not None:
+        return default
+    if value not in ("draft", "published"):
+        raise validation_error("status must be draft or published")
+    return value  # type: ignore[return-value]
 
 
 def version(value: object) -> int:
-    # TODO(phase-3 M1): a positive integer (booleans are not integers!). Required on PATCH.
-    raise NotImplementedError("TODO(phase-3 M1): version")
+    if not _is_int(value) or value < 1:  # type: ignore[operator]
+        raise validation_error("version is required (the version you read)")
+    return value  # type: ignore[return-value]
 
 
 def comment_body(value: object) -> str:
-    # TODO(phase-3 M1): string, trimmed, 1..2000 characters.
-    raise NotImplementedError("TODO(phase-3 M1): comment_body")
+    if not isinstance(value, str) or not 1 <= len(value.strip()) <= MAX_COMMENT:
+        raise validation_error("body must be 1-2000 characters")
+    return value.strip()
 
 
 def parent_id(value: object) -> int | None:
-    # TODO(phase-3 M1): missing/null -> null; otherwise a positive integer.
-    raise NotImplementedError("TODO(phase-3 M1): parent_id")
+    if value is None:
+        return None
+    if not _is_int(value) or value < 1:  # type: ignore[operator]
+        raise validation_error("parentId must be a positive integer")
+    return value  # type: ignore[return-value]
 
 
 def limit(value: str | None) -> int:
-    # TODO(phase-3 M1): query string: missing -> 10; ASCII digits only ([0-9]+: isdigit() also accepts
-    # other scripts), 1..50.
-    raise NotImplementedError("TODO(phase-3 M1): limit")
+    if value is None:
+        return DEFAULT_LIMIT
+    if not DIGITS_RE.match(value) or not 1 <= int(value) <= MAX_LIMIT:
+        raise validation_error("limit must be an integer 1-50")
+    return int(value)
 
 
 def tag_filter(value: str | None) -> str | None:
-    # TODO(phase-3 M1): query string: missing/empty -> null; otherwise lower-cased and must match TAG_RE.
-    raise NotImplementedError("TODO(phase-3 M1): tag_filter")
+    if value is None or value == "":
+        return None
+    t = value.strip().lower()
+    if len(t) > 30 or not TAG_RE.match(t):
+        raise validation_error("tag must be lower-case letters, digits and single hyphens (max 30)")
+    return t
 
 
 def search_query(value: str | None) -> str | None:
-    # TODO(phase-3 M1): query string: trimmed; empty -> null; at most 100 characters.
-    raise NotImplementedError("TODO(phase-3 M1): search_query")
+    if value is None or not value.strip():
+        return None
+    if len(value.strip()) > 100:
+        raise validation_error("q must be at most 100 characters")
+    return value.strip()
 
 
 def comment_status(value: str | None) -> str:
-    # TODO(phase-3 M1): query string: missing -> 'held'; otherwise held, visible or rejected.
-    raise NotImplementedError("TODO(phase-3 M1): comment_status")
+    if value is None:
+        return "held"
+    if value not in ("held", "visible", "rejected"):
+        raise validation_error("status must be held, visible or rejected")
+    return value
 
 
 def decision(value: object) -> str:
-    # TODO(phase-3 M1): 'approve' or 'reject'.
-    raise NotImplementedError("TODO(phase-3 M1): decision")
+    if value not in ("approve", "reject"):
+        raise validation_error("decision must be approve or reject")
+    return value  # type: ignore[return-value]
 
 
 def path_id(value: str, what: str) -> int:
     """A non-numeric id in the URL cannot exist, so it is a 404 rather than a 400."""
-    # TODO(phase-3 M1): path segment: ASCII digits only (at most 18), otherwise a 404 not-found for
-    # `what`: an id that cannot exist is not a 400.
-    raise NotImplementedError("TODO(phase-3 M1): path_id")
+    if not DIGITS_RE.match(value) or len(value) > 18:
+        raise not_found(what)
+    return int(value)

@@ -2,8 +2,14 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import re
+import unicodedata
 from datetime import datetime
+
+from .clock import iso
+from .errors import validation_error
 
 SLUG_MAX = 80
 EXCERPT_MAX = 160
@@ -14,36 +20,40 @@ _CURSOR = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3})Z\|([0-9]{1,
 
 def slugify(title: str) -> str:
     """'Café & Code: Part 2!' -> 'cafe-code-part-2'. Empty results become 'post'."""
-    # TODO(phase-3 M1): NFKD-normalise, drop non-ASCII, lower-case, runs of anything but [a-z0-9] -> one
-    # '-', trim '-', cut to 80 and trim '-' again; empty -> 'post'.
-    raise NotImplementedError("TODO(phase-3 M1): slugify")
+    ascii_title = unicodedata.normalize("NFKD", title).encode("ascii", "ignore").decode("ascii")
+    slug = re.sub(r"[^a-z0-9]+", "-", ascii_title.lower()).strip("-")
+    slug = slug[:SLUG_MAX].rstrip("-")
+    return slug or "post"
 
 
 def plain_text(markdown: str) -> str:
     """Drop the most common markdown symbols and collapse whitespace."""
-    # TODO(phase-3 M1): drop the characters # * ` > and collapse whitespace (then trim). Used by excerpts
-    # and summaries.
-    raise NotImplementedError("TODO(phase-3 M1): plain_text")
+    return _SPACES.sub(" ", _MARKUP.sub("", markdown)).strip()
 
 
 def shorten(text: str, max_len: int) -> str:
-    # TODO(phase-3 M1): at most `limit` characters (code points): if longer, cut to limit-3 (no trailing
-    # space) and add '...'.
-    raise NotImplementedError("TODO(phase-3 M1): shorten")
+    if len(text) <= max_len:
+        return text
+    return text[: max_len - 3].rstrip() + "..."
 
 
 def excerpt(body: str) -> str:
-    # TODO(phase-3 M1): shorten(plain_text(body), 160).
-    raise NotImplementedError("TODO(phase-3 M1): excerpt")
+    return shorten(plain_text(body), EXCERPT_MAX)
 
 
 def encode_cursor(published_at: datetime, post_id: int) -> str:
-    # TODO(phase-3 M1): base64url WITHOUT padding of 'YYYY-MM-DDTHH:MM:SS.sssZ|id' (milliseconds, UTC).
-    # ADR-0002.
-    raise NotImplementedError("TODO(phase-3 M1): encode_cursor")
+    raw = f"{iso(published_at)}|{post_id}".encode()
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
 
 
 def decode_cursor(cursor: str | None) -> tuple[datetime, int] | None:
-    # TODO(phase-3 M1): missing/empty -> null; anything that does not decode to exactly that format -> 400
-    # 'cursor is invalid'.
-    raise NotImplementedError("TODO(phase-3 M1): decode_cursor")
+    if cursor is None or cursor == "":
+        return None
+    try:
+        raw = base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)).decode()
+        match = _CURSOR.match(raw)
+        if match is None:
+            raise ValueError(raw)
+        return datetime.fromisoformat(match.group(1) + "+00:00"), int(match.group(2))
+    except (ValueError, binascii.Error, UnicodeDecodeError) as exc:
+        raise validation_error("cursor is invalid") from exc

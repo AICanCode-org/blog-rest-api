@@ -14,18 +14,6 @@ from app.repository import InMemoryStore
 # watch the tests fail (red), implement until they pass (green). See docs/phase-3.
 # ---------------------------------------------------------------------------
 PENDING: dict[str, str] = {
-    "test_validation.py": "Phase 3 M1 - validation",
-    "test_text.py": "Phase 3 M1 - slugs, excerpts, cursors",
-    "test_security.py": "Phase 3 M2 - passwords and tokens",
-    "test_auth.py": "Phase 3 M2 - AuthService",
-    "test_api_auth.py": "Phase 3 M2 - auth endpoints",
-    "test_posts.py": "Phase 3 M3 - PostService",
-    "test_api_posts.py": "Phase 3 M3 - post endpoints",
-    "test_feed.py": "Phase 3 M4 - feed, search, tags",
-    "test_moderation.py": "Phase 3 M5 - AI moderation",
-    "test_summaries.py": "Phase 3 M5 - AI summaries",
-    "test_comments.py": "Phase 3 M5 - CommentService",
-    "test_api_comments.py": "Phase 3 M5 - comment endpoints",
     "test_api_integration.py": "Phase 4 - integration tests",
 }
 

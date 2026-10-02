@@ -9,6 +9,7 @@ The LLM is any OpenAI-compatible /chat/completions endpoint: Ollama locally, or 
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from dataclasses import dataclass
@@ -17,6 +18,7 @@ from typing import Protocol
 import httpx
 
 from .models import Moderation
+from .text import plain_text, shorten
 
 log = logging.getLogger("devblog.ai")
 HOLD_THRESHOLD = 0.7
@@ -77,9 +79,17 @@ class RuleModerator:
     """Deterministic and offline. The term lists and the order of the checks are part of the spec."""
 
     def classify(self, text: str) -> Verdict:
-        # TODO(phase-3 M5): see the moderation tests: toxic words (whole words) 0.9, spam phrases 0.9, 2+
-        # links spam 0.75 'N links', otherwise ok 0.6 'no rule matched'.
-        raise NotImplementedError("TODO(phase-3 M5): RuleModerator.classify")
+        lower = text.lower()
+        for term in TOXIC_TERMS:
+            if re.search(rf"\b{re.escape(term)}\b", lower):
+                return Verdict("toxic", 0.9, f"toxic language: {term}")
+        for phrase in SPAM_PHRASES:
+            if phrase in lower:
+                return Verdict("spam", 0.9, f"spam phrase: {phrase}")
+        links = len(_LINK.findall(lower))
+        if links >= 2:
+            return Verdict("spam", 0.75, f"{links} links")
+        return Verdict("ok", 0.6, "no rule matched")
 
 
 MODERATION_PROMPT = (
@@ -92,10 +102,18 @@ MODERATION_PROMPT = (
 
 def parse_verdict(raw: str) -> Verdict:
     """Strictly validate the model's answer. Anything unexpected raises, which triggers the fallback."""
-    # TODO(phase-3 M5): find the JSON object in the answer; label in ok/spam/toxic, confidence a number
-    # 0..1 (round to 2 decimals), reason a string (collapse spaces, at most 200). Anything else -> throw
-    # (the caller falls back).
-    raise NotImplementedError("TODO(phase-3 M5): parse_verdict")
+    start, end = raw.find("{"), raw.rfind("}")
+    if start < 0 or end < start:
+        raise ValueError("no JSON object in LLM answer")
+    data = json.loads(raw[start : end + 1])
+    label, confidence, reason = data.get("label"), data.get("confidence"), data.get("reason", "")
+    if label not in LABELS:
+        raise ValueError(f"unknown label {label!r}")
+    if isinstance(confidence, bool) or not isinstance(confidence, int | float) or not 0 <= confidence <= 1:
+        raise ValueError(f"confidence out of range: {confidence!r}")
+    if not isinstance(reason, str):
+        raise ValueError("reason must be a string")
+    return Verdict(label, round(float(confidence), 2), shorten(" ".join(reason.split()), 200) or "llm")
 
 
 class LlmModerator:
@@ -103,11 +121,7 @@ class LlmModerator:
         self._client = client
 
     def classify(self, text: str) -> Verdict:
-        # TODO(phase-3 M5): one POST {LLM_BASE_URL}/chat/completions (OpenAI-compatible, Bearer
-        #   LLM_API_KEY if set, LLM_TIMEOUT_MS) with a system prompt asking for JSON {label,
-        #   confidence, reason}; return parse_verdict(answer). Let errors propagate: ModerationService
-        #   falls back.
-        raise NotImplementedError("TODO(phase-3 M5): LlmModerator.classify")
+        return parse_verdict(self._client.chat(MODERATION_PROMPT, f"<comment>\n{text}\n</comment>", 60))
 
 
 class ModerationService:
@@ -116,14 +130,20 @@ class ModerationService:
         self._llm = llm
 
     def moderate(self, text: str) -> Moderation:
-        # TODO(phase-3 M5): LLM first if configured; ANY exception -> rules with fallback=true (log a
-        # warning). No LLM -> rules with fallback=false.
-        raise NotImplementedError("TODO(phase-3 M5): ModerationService.moderate")
+        if self._llm is not None:
+            try:
+                v = self._llm.classify(text)
+                return Moderation(v.label, v.confidence, "llm", False, v.reason)
+            except Exception as exc:  # noqa: BLE001 - any LLM failure -> graceful fallback
+                log.warning("LLM moderation failed, using rules: %s", exc)
+                v = self._rules.classify(text)
+                return Moderation(v.label, v.confidence, "rules", True, v.reason)
+        v = self._rules.classify(text)
+        return Moderation(v.label, v.confidence, "rules", False, v.reason)
 
 
 def should_hold(m: Moderation) -> bool:
-    # TODO(phase-3 M5): label != ok AND confidence >= HOLD_THRESHOLD (0.7).
-    raise NotImplementedError("TODO(phase-3 M5): should_hold")
+    return m.label != "ok" and m.confidence >= HOLD_THRESHOLD
 
 
 # ---- summaries --------------------------------------------------------------------------------
@@ -138,9 +158,10 @@ class TemplateSummarizer:
     """The first two sentences of the post, at most 280 characters. Deterministic and offline."""
 
     def summarize(self, title: str, body: str) -> str:
-        # TODO(phase-3 M5): deterministic: the first two sentences of plain_text(body), at most 280
-        #   characters; an empty body -> the title. Exact cases: see the summary tests.
-        raise NotImplementedError("TODO(phase-3 M5): TemplateSummarizer.summarize")
+        text = plain_text(body)
+        if not text:
+            return shorten(title, SUMMARY_MAX)
+        return shorten(" ".join(_SENTENCE_END.split(text)[:2]), SUMMARY_MAX)
 
 
 SUMMARY_PROMPT = (
@@ -154,9 +175,11 @@ class LlmSummarizer:
         self._client = client
 
     def summarize(self, title: str, body: str) -> str:
-        # TODO(phase-3 M5): cap the input at LLM_INPUT_MAX, one chat/completions call, clean the
-        #   answer (collapse spaces, at most 280); an empty answer is an error. Let errors propagate.
-        raise NotImplementedError("TODO(phase-3 M5): LlmSummarizer.summarize")
+        prompt = f"<post>\nTitle: {title}\n\n{body[:LLM_INPUT_MAX]}\n</post>"
+        text = " ".join(self._client.chat(SUMMARY_PROMPT, prompt, 120).split())
+        if not text:
+            raise ValueError("empty summary")
+        return shorten(text, SUMMARY_MAX)
 
 
 @dataclass(frozen=True)
@@ -172,6 +195,10 @@ class SummaryService:
         self._llm = llm
 
     def summarize(self, title: str, body: str) -> SummaryResult:
-        # TODO(phase-3 M5): LLM if configured, ANY exception -> template with fallback=true (log a
-        #   warning); no LLM -> template with fallback=false.
-        raise NotImplementedError("TODO(phase-3 M5): SummaryService.summarize")
+        if self._llm is not None:
+            try:
+                return SummaryResult("llm", False, self._llm.summarize(title, body))
+            except Exception as exc:  # noqa: BLE001 - any LLM failure -> graceful fallback
+                log.warning("LLM summary failed, using template: %s", exc)
+                return SummaryResult("template", True, self._template.summarize(title, body))
+        return SummaryResult("template", False, self._template.summarize(title, body))

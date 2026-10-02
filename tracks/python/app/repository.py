@@ -13,6 +13,7 @@ from dataclasses import replace
 from datetime import datetime
 from typing import Protocol
 
+from psycopg import errors as pg_errors
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
@@ -110,39 +111,57 @@ class PostgresUserRepository:
             return cur.fetchone()
 
     def insert_user(self, email, password_hash, display_name, role, at) -> User:
-        # TODO(phase-3 M2): INSERT ... RETURNING; unique violation on email -> DuplicateError.
-        raise NotImplementedError("TODO(phase-3 M2): PostgresUserRepository.insert_user")
+        try:
+            row = self._one(
+                f"INSERT INTO users (email, password_hash, display_name, role, created_at) "
+                f"VALUES (%s, %s, %s, %s, %s) RETURNING {_USER_COLS}",
+                (email, password_hash, display_name, role, at),
+            )
+        except pg_errors.UniqueViolation as exc:
+            raise DuplicateError("email") from exc
+        return _user(row)
 
     def find_user_by_email(self, email) -> User | None:
-        # TODO(phase-3 M2): SELECT by email (already lower-cased).
-        raise NotImplementedError("TODO(phase-3 M2): PostgresUserRepository.find_user_by_email")
+        row = self._one(f"SELECT {_USER_COLS} FROM users WHERE email = %s", (email,))
+        return _user(row) if row else None
 
     def find_user(self, user_id) -> User | None:
-        # TODO(phase-3 M2): SELECT by id.
-        raise NotImplementedError("TODO(phase-3 M2): PostgresUserRepository.find_user")
+        row = self._one(f"SELECT {_USER_COLS} FROM users WHERE id = %s", (user_id,))
+        return _user(row) if row else None
 
     def update_role(self, user_id, role) -> User | None:
-        # TODO(phase-3 M2): UPDATE ... RETURNING; null when the user does not exist.
-        raise NotImplementedError("TODO(phase-3 M2): PostgresUserRepository.update_role")
+        row = self._one(f"UPDATE users SET role = %s WHERE id = %s RETURNING {_USER_COLS}", (role, user_id))
+        return _user(row) if row else None
 
     def insert_refresh_token(self, user_id, token_hash, at, expires_at) -> None:
-        # TODO(phase-3 M2): store user id, token HASH, created_at, expires_at.
-        raise NotImplementedError("TODO(phase-3 M2): PostgresUserRepository.insert_refresh_token")
+        with self._pool.connection() as conn:
+            conn.execute(
+                "INSERT INTO refresh_tokens (user_id, token_hash, created_at, expires_at) VALUES (%s, %s, %s, %s)",
+                (user_id, token_hash, at, expires_at),
+            )
 
     def find_refresh_token(self, token_hash) -> RefreshToken | None:
-        # TODO(phase-3 M2): SELECT by token hash.
-        raise NotImplementedError("TODO(phase-3 M2): PostgresUserRepository.find_refresh_token")
+        row = self._one(
+            "SELECT id, user_id, token_hash, created_at, expires_at, revoked_at FROM refresh_tokens "
+            "WHERE token_hash = %s",
+            (token_hash,),
+        )
+        return RefreshToken(**row) if row else None
 
     def revoke_refresh_token(self, token_id, at) -> bool:
         # "AND revoked_at IS NULL" makes this a compare-and-set: of two concurrent refreshes with the
         # same token, exactly one sees rowcount 1. The other is treated as reuse.
-        # TODO(phase-3 M2): compare-and-set: UPDATE ... SET revoked_at WHERE id = ? AND revoked_at IS NULL;
-        # return true only if a row changed (this is what makes concurrent refreshes safe).
-        raise NotImplementedError("TODO(phase-3 M2): PostgresUserRepository.revoke_refresh_token")
+        with self._pool.connection() as conn:
+            cur = conn.execute(
+                "UPDATE refresh_tokens SET revoked_at = %s WHERE id = %s AND revoked_at IS NULL", (at, token_id)
+            )
+            return cur.rowcount == 1
 
     def revoke_all_refresh_tokens(self, user_id, at) -> None:
-        # TODO(phase-3 M2): revoke every not-yet-revoked token of the user.
-        raise NotImplementedError("TODO(phase-3 M2): PostgresUserRepository.revoke_all_refresh_tokens")
+        with self._pool.connection() as conn:
+            conn.execute(
+                "UPDATE refresh_tokens SET revoked_at = %s WHERE user_id = %s AND revoked_at IS NULL", (at, user_id)
+            )
 
     def ping(self) -> bool:
         try:
@@ -163,33 +182,71 @@ class PostgresPostRepository:
         return _post(row) if row else None
 
     def insert_post(self, post: Post) -> Post:
-        # TODO(phase-3 M3): one transaction: INSERT the post (unique violation on slug -> DuplicateError),
-        # upsert the tags, link them, return the post read back with author name and tags.
-        raise NotImplementedError("TODO(phase-3 M3): PostgresPostRepository.insert_post")
+        try:
+            with self._pool.connection() as conn, conn.transaction(), conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    "INSERT INTO posts (slug, author_id, title, body, status, created_at, updated_at, published_at) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+                    (post.slug, post.author_id, post.title, post.body, post.status,
+                     post.created_at, post.updated_at, post.published_at),
+                )  # fmt: skip
+                post_id = cur.fetchone()["id"]
+                _replace_tags(cur, post_id, post.tags)
+                return self._select_one(cur, "WHERE p.id = %s", (post_id,))
+        except pg_errors.UniqueViolation as exc:
+            raise DuplicateError("slug") from exc
 
     def find_post(self, slug) -> Post | None:
-        # TODO(phase-3 M3): by slug, not deleted, with author name and tags.
-        raise NotImplementedError("TODO(phase-3 M3): PostgresPostRepository.find_post")
+        with self._pool.connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            return self._select_one(cur, "WHERE p.slug = %s AND p.deleted_at IS NULL", (slug,))
 
     def update_post(self, post: Post, expected_version: int) -> Post | None:
-        # TODO(phase-3 M3): UPDATE ... WHERE id = ? AND version = ? AND deleted_at IS NULL, version = version
-        # + 1; 0 rows -> null (conflict). Replace the tags in the same transaction.
-        raise NotImplementedError("TODO(phase-3 M3): PostgresPostRepository.update_post")
+        with self._pool.connection() as conn, conn.transaction(), conn.cursor(row_factory=dict_row) as cur:
+            # Optimistic locking: the WHERE clause only matches if nobody saved in between.
+            cur.execute(
+                "UPDATE posts SET title = %s, body = %s, status = %s, published_at = %s, updated_at = %s, "
+                "version = version + 1 WHERE id = %s AND version = %s AND deleted_at IS NULL RETURNING id",
+                (post.title, post.body, post.status, post.published_at, post.updated_at, post.id, expected_version),
+            )
+            if cur.fetchone() is None:
+                return None
+            _replace_tags(cur, post.id, post.tags)
+            return self._select_one(cur, "WHERE p.id = %s", (post.id,))
 
     def soft_delete_post(self, post_id, at) -> None:
-        # TODO(phase-3 M3): set deleted_at; never DELETE the row.
-        raise NotImplementedError("TODO(phase-3 M3): PostgresPostRepository.soft_delete_post")
+        with self._pool.connection() as conn:
+            conn.execute("UPDATE posts SET deleted_at = %s WHERE id = %s AND deleted_at IS NULL", (at, post_id))
 
     def feed(self, query: FeedQuery) -> list[Post]:
-        # TODO(phase-3 M4): WHERE published AND not deleted [AND tag] [AND search_vector @@
-        # websearch_to_tsquery('english', q)] [AND (published_at, id) < (cursor)] ORDER BY published_at DESC,
-        # id DESC LIMIT n. Uses the index from V1.
-        raise NotImplementedError("TODO(phase-3 M4): PostgresPostRepository.feed")
+        where = ["p.status = 'published'", "p.deleted_at IS NULL"]
+        params: list = []
+        if query.tag:
+            where.append(
+                "EXISTS (SELECT 1 FROM post_tags pt JOIN tags t ON t.id = pt.tag_id "
+                "WHERE pt.post_id = p.id AND t.name = %s)"
+            )
+            params.append(query.tag)
+        if query.q:
+            where.append("p.search_vector @@ websearch_to_tsquery('english', %s)")
+            params.append(query.q)
+        if query.after:
+            # Keyset pagination: "everything older than the last row I saw" - no OFFSET scan.
+            where.append("(p.published_at, p.id) < (%s, %s)")
+            params.extend(query.after)
+        sql = _POST_SELECT + "WHERE " + " AND ".join(where) + " ORDER BY p.published_at DESC, p.id DESC LIMIT %s"
+        params.append(query.limit)
+        with self._pool.connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(sql, params)
+            return [_post(r) for r in cur.fetchall()]
 
     def tag_counts(self) -> list[TagCount]:
-        # TODO(phase-3 M4): SELECT name, COUNT(*) over published, non-deleted posts GROUP BY name ORDER BY
-        # name.
-        raise NotImplementedError("TODO(phase-3 M4): PostgresPostRepository.tag_counts")
+        with self._pool.connection() as conn:
+            rows = conn.execute(
+                "SELECT t.name, COUNT(*) FROM tags t JOIN post_tags pt ON pt.tag_id = t.id "
+                "JOIN posts p ON p.id = pt.post_id WHERE p.status = 'published' AND p.deleted_at IS NULL "
+                "GROUP BY t.name ORDER BY COUNT(*) DESC, t.name"
+            ).fetchall()
+            return [TagCount(name=r[0], posts=r[1]) for r in rows]
 
 
 class PostgresCommentRepository:
@@ -202,28 +259,45 @@ class PostgresCommentRepository:
             return [_comment(r) for r in cur.fetchall()]
 
     def insert_comment(self, comment: Comment) -> Comment:
-        # TODO(phase-3 M5): INSERT with the moderation columns, read it back with author name and post slug.
-        raise NotImplementedError("TODO(phase-3 M5): PostgresCommentRepository.insert_comment")
+        m = comment.moderation
+        with self._pool.connection() as conn:
+            row = conn.execute(
+                "INSERT INTO comments (post_id, author_id, parent_id, body, status, moderation_label, "
+                "moderation_confidence, moderation_provider, moderation_fallback, moderation_reason, created_at) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+                (comment.post_id, comment.author_id, comment.parent_id, comment.body, comment.status,
+                 m.label, m.confidence, m.provider, m.fallback, m.reason, comment.created_at),
+            ).fetchone()  # fmt: skip
+        return self.find_comment(row[0])  # type: ignore[return-value]
 
     def find_comment(self, comment_id) -> Comment | None:
-        # TODO(phase-3 M5): by id, not deleted.
-        raise NotImplementedError("TODO(phase-3 M5): PostgresCommentRepository.find_comment")
+        rows = self._query("WHERE c.id = %s AND c.deleted_at IS NULL", (comment_id,))
+        return rows[0] if rows else None
 
     def visible_comments(self, post_id) -> list[Comment]:
-        # TODO(phase-3 M5): status 'visible', not deleted, ORDER BY created_at, id.
-        raise NotImplementedError("TODO(phase-3 M5): PostgresCommentRepository.visible_comments")
+        return self._query(
+            "WHERE c.post_id = %s AND c.status = 'visible' AND c.deleted_at IS NULL ORDER BY c.created_at, c.id",
+            (post_id,),
+        )
 
     def comments_by_status(self, status) -> list[Comment]:
-        # TODO(phase-3 M5): by status, not deleted, post not deleted, ORDER BY created_at, id.
-        raise NotImplementedError("TODO(phase-3 M5): PostgresCommentRepository.comments_by_status")
+        return self._query(
+            "WHERE c.status = %s AND c.deleted_at IS NULL AND p.deleted_at IS NULL ORDER BY c.created_at, c.id",
+            (status,),
+        )
 
     def set_comment_status(self, comment_id, status, by, at) -> Comment | None:
-        # TODO(phase-3 M5): UPDATE status, moderated_by, moderated_at RETURNING; null if missing.
-        raise NotImplementedError("TODO(phase-3 M5): PostgresCommentRepository.set_comment_status")
+        with self._pool.connection() as conn:
+            conn.execute(
+                "UPDATE comments SET status = %s, moderated_by = %s, moderated_at = %s "
+                "WHERE id = %s AND deleted_at IS NULL",
+                (status, by, at, comment_id),
+            )
+        return self.find_comment(comment_id)
 
     def soft_delete_comment(self, comment_id, at) -> None:
-        # TODO(phase-3 M5): set deleted_at.
-        raise NotImplementedError("TODO(phase-3 M5): PostgresCommentRepository.soft_delete_comment")
+        with self._pool.connection() as conn:
+            conn.execute("UPDATE comments SET deleted_at = %s WHERE id = %s AND deleted_at IS NULL", (at, comment_id))
 
 
 # ---------------------------------------------------------------------------------------------

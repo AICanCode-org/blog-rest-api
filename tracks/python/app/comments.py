@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
-from .ai import ModerationService
+from . import validation as v
+from .ai import ModerationService, should_hold
+from .auth import require_role
 from .clock import Clock
+from .errors import forbidden, not_found, validation_error
 from .models import Comment, Post, Principal
 from .repository import CommentRepository, PostRepository
 
@@ -16,31 +19,51 @@ class CommentService:
         self._clock = clock
 
     def _published_post(self, slug: str) -> Post:
-        # TODO(phase-3 M5): find the post by slug; missing, deleted or draft -> 404 not-found
-        #   'post'.
-        raise NotImplementedError("TODO(phase-3 M5): CommentService._published_post")
+        post = self._posts.find_post(slug)
+        if post is None or post.status != "published":
+            raise not_found("post")
+        return post
 
     def create(self, principal: Principal, slug: str, payload: object) -> Comment:
-        # TODO(phase-3 M5): validate body and parentId; the post must be PUBLISHED (404); a parent
-        #   must be a visible top-level comment of the same post (400); moderate the body and store it
-        #   as 'held' when should_hold, else 'visible'.
-        raise NotImplementedError("TODO(phase-3 M5): CommentService.create")
+        data = v.require_object(payload)
+        body = v.comment_body(data.get("body"))
+        parent_id = v.parent_id(data.get("parentId"))
+        post = self._published_post(slug)
+        if parent_id is not None:
+            parent = self.comments.find_comment(parent_id)
+            if (
+                parent is None
+                or parent.post_id != post.id
+                or parent.parent_id is not None
+                or parent.status != "visible"
+            ):
+                raise validation_error("parentId must be a visible top-level comment of this post")
+        moderation = self._moderation.moderate(body)
+        status = "held" if should_hold(moderation) else "visible"
+        comment = Comment(0, post.id, post.slug, principal.user_id, "", parent_id, body, status, moderation,
+                          self._clock())  # fmt: skip
+        return self.comments.insert_comment(comment)
 
     def list(self, slug: str) -> list[Comment]:
-        # TODO(phase-3 M5): visible comments of a PUBLISHED post (404 otherwise), oldest first.
-        raise NotImplementedError("TODO(phase-3 M5): CommentService.list")
+        return self.comments.visible_comments(self._published_post(slug).id)
 
     def delete(self, principal: Principal, comment_id: int) -> None:
-        # TODO(phase-3 M5): unknown comment -> 404; only its author or an ADMIN (403); SOFT delete
-        #   (deleted_at).
-        raise NotImplementedError("TODO(phase-3 M5): CommentService.delete")
+        comment = self.comments.find_comment(comment_id)
+        if comment is None:
+            raise not_found("comment")
+        if not (principal.is_admin or principal.user_id == comment.author_id):
+            raise forbidden("only the author or an ADMIN can delete this comment")
+        self.comments.soft_delete_comment(comment_id, self._clock())
 
     def queue(self, principal: Principal, status: str | None) -> list[Comment]:
-        # TODO(phase-3 M5): ADMIN only; comments with the given status (default held), excluding comments of
-        # deleted posts.
-        raise NotImplementedError("TODO(phase-3 M5): CommentService.queue")
+        require_role(principal, "ADMIN")
+        return self.comments.comments_by_status(v.comment_status(status))
 
     def decide(self, principal: Principal, comment_id: int, payload: object) -> Comment:
-        # TODO(phase-3 M5): ADMIN only; approve -> visible, reject -> rejected; record moderated_by/at; keep
-        # the AI verdict; unknown id -> 404.
-        raise NotImplementedError("TODO(phase-3 M5): CommentService.decide")
+        require_role(principal, "ADMIN")
+        decision = v.decision(v.require_object(payload).get("decision"))
+        status = "visible" if decision == "approve" else "rejected"
+        updated = self.comments.set_comment_status(comment_id, status, principal.user_id, self._clock())
+        if updated is None:
+            raise not_found("comment")
+        return updated
