@@ -1,0 +1,33 @@
+name: User story
+description: A small, testable slice of user value (Phase 1 creates these)
+title: "US-<n>: <short title>"
+labels: ["user-story"]
+body:
+  - type: textarea
+    id: story
+    attributes:
+      label: Story
+      description: As a <persona>, I want <capability>, so that <benefit>.
+      placeholder: As Meera (author), I want to save a post as a draft, so that nobody sees it before it is ready.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria (Given / When / Then)
+      placeholder: |
+        - Given I am an AUTHOR, when I create a post without a status, then it is a draft
+        - Given a draft, when an anonymous reader requests it, then they get 404 (not 403)
+    validations:
+      required: true
+  - type: dropdown
+    id: milestone
+    attributes:
+      label: Phase 3 milestone
+      options: ["M1 validation + text helpers", "M2 auth (passwords, JWT, refresh, roles)", "M3 posts (CRUD, drafts, locking)", "M4 feed, tags, search", "M5 comments + AI moderation + summaries", "Later"]
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes / out of scope

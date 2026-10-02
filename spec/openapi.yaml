@@ -1,0 +1,656 @@
+openapi: 3.1.0
+info:
+  title: DevBlog API
+  version: 1.0.0
+  summary: A secure blogging backend with JWT auth, roles, comments and AI moderation (AiCanCode course project).
+  description: |
+    The shared HTTP contract for the Java, Python and TypeScript tracks. All three implement exactly
+    this, and the same black-box smoke test (`scripts/smoke-test.sh`) runs against each of them.
+
+    * Errors use RFC 9457 `application/problem+json`.
+    * Timestamps are ISO-8601 UTC with millisecond precision and a `Z` suffix.
+    * Authenticated endpoints need `Authorization: Bearer <accessToken>` (a JWT, HS256, 15 minutes).
+    * Roles: `READER` (default at registration), `AUTHOR` (may write posts), `ADMIN` (everything).
+  license:
+    name: MIT
+    identifier: MIT
+servers:
+  - url: http://localhost:8080
+    description: Local (any track)
+tags:
+  - name: auth
+  - name: posts
+  - name: comments
+  - name: admin
+  - name: ops
+
+paths:
+  /health:
+    get:
+      tags: [ops]
+      summary: Liveness and database health
+      operationId: health
+      responses:
+        "200":
+          description: The app and its database are up
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Health" }
+              example: { status: UP, checks: { database: UP } }
+        "503":
+          description: The database is unreachable
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Health" }
+
+  /api/v1/auth/register:
+    post:
+      tags: [auth]
+      summary: Create an account (always role READER)
+      description: Any `role` in the body is ignored. Only an ADMIN can change roles.
+      operationId: register
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RegisterRequest" }
+      responses:
+        "201":
+          description: Account created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "409":
+          description: The e-mail address is already registered (`email-taken`)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /api/v1/auth/login:
+    post:
+      tags: [auth]
+      summary: Exchange e-mail + password for an access token and a refresh token
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LoginRequest" }
+      responses:
+        "200":
+          description: Logged in
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TokenPair" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401":
+          description: Wrong e-mail or password (`invalid-credentials`; the same answer for both, so accounts cannot be enumerated)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /api/v1/auth/refresh:
+    post:
+      tags: [auth]
+      summary: Rotate a refresh token
+      description: |
+        Returns a new token pair and revokes the refresh token that was sent. Sending a refresh token
+        that was already used is treated as theft: every refresh token of that user is revoked.
+      operationId: refresh
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RefreshRequest" }
+      responses:
+        "200":
+          description: New token pair (the role is re-read from the database)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TokenPair" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401":
+          description: Unknown, expired, revoked or reused refresh token (`invalid-refresh-token`)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /api/v1/auth/logout:
+    post:
+      tags: [auth]
+      summary: Revoke a refresh token (idempotent)
+      operationId: logout
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RefreshRequest" }
+      responses:
+        "204": { description: Revoked (or it was already unknown or revoked) }
+        "400": { $ref: "#/components/responses/ValidationError" }
+
+  /api/v1/me:
+    get:
+      tags: [auth]
+      summary: The current user
+      operationId: me
+      security: [{ bearer: [] }]
+      responses:
+        "200":
+          description: The user the access token belongs to
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/posts:
+    get:
+      tags: [posts]
+      summary: The public feed (published posts, newest first, keyset pagination)
+      operationId: listPosts
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 50, default: 10 }
+        - name: cursor
+          in: query
+          description: The `nextCursor` of the previous page (opaque)
+          schema: { type: string }
+        - name: tag
+          in: query
+          schema: { type: string, pattern: "^[a-z0-9]+(-[a-z0-9]+)*$", maxLength: 30 }
+        - name: q
+          in: query
+          description: Full-text search in title and body (PostgreSQL `websearch_to_tsquery`, English)
+          schema: { type: string, maxLength: 100 }
+      responses:
+        "200":
+          description: One page of post summaries
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PostPage" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+    post:
+      tags: [posts]
+      summary: Write a post (AUTHOR or ADMIN)
+      operationId: createPost
+      security: [{ bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreatePostRequest" }
+      responses:
+        "201":
+          description: Created. The slug is derived from the title and made unique (`-2`, `-3`, ...)
+          headers:
+            Location: { schema: { type: string }, description: "/api/v1/posts/{slug}" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Post" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/v1/posts/{slug}:
+    parameters:
+      - $ref: "#/components/parameters/Slug"
+    get:
+      tags: [posts]
+      summary: One post
+      description: Published posts are public. A draft is visible only to its author and to ADMINs; everyone else gets `404`.
+      operationId: getPost
+      security: [{}, { bearer: [] }]
+      responses:
+        "200":
+          description: The post
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Post" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [posts]
+      summary: Edit a post (its author or an ADMIN), with optimistic locking
+      description: Send the `version` you read. If someone saved in between, you get `409 version-conflict`. The slug never changes.
+      operationId: updatePost
+      security: [{ bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdatePostRequest" }
+      responses:
+        "200":
+          description: Updated (version + 1)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Post" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: The post changed since you read it (`version-conflict`)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+    delete:
+      tags: [posts]
+      summary: Soft-delete a post (its author or an ADMIN)
+      operationId: deletePost
+      security: [{ bearer: [] }]
+      responses:
+        "204": { description: Deleted (hidden everywhere; the row is kept) }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/posts/{slug}/summary:
+    parameters:
+      - $ref: "#/components/parameters/Slug"
+    get:
+      tags: [posts]
+      summary: "AI feature: a TL;DR of the post (offline template by default, optional LLM with fallback)"
+      operationId: getPostSummary
+      security: [{}, { bearer: [] }]
+      responses:
+        "200":
+          description: The summary (at most 280 characters)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PostSummaryResult" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/posts/{slug}/comments:
+    parameters:
+      - $ref: "#/components/parameters/Slug"
+    get:
+      tags: [comments]
+      summary: Visible comments of a published post, oldest first
+      operationId: listComments
+      responses:
+        "200":
+          description: Comments (replies carry a `parentId`)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CommentList" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      tags: [comments]
+      summary: Comment on a published post (any signed-in user); moderated before it is shown
+      description: |
+        Every comment is classified as `ok`, `spam` or `toxic`. A non-`ok` label with confidence ≥ 0.7
+        puts the comment on hold (`status: held`) for an ADMIN to decide. The AI never deletes or
+        rejects anything on its own.
+      operationId: createComment
+      security: [{ bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateCommentRequest" }
+      responses:
+        "201":
+          description: Created (`visible` or `held`)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Comment" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/comments/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    delete:
+      tags: [comments]
+      summary: Soft-delete a comment (its author or an ADMIN)
+      operationId: deleteComment
+      security: [{ bearer: [] }]
+      responses:
+        "204": { description: Deleted }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/tags:
+    get:
+      tags: [posts]
+      summary: Tags with the number of published posts, most used first
+      operationId: listTags
+      responses:
+        "200":
+          description: Tags
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TagList" }
+
+  /api/v1/admin/users/{id}/role:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    patch:
+      tags: [admin]
+      summary: Change a user's role (ADMIN)
+      description: Takes effect at the user's next login or refresh (access tokens are stateless).
+      operationId: changeRole
+      security: [{ bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ChangeRoleRequest" }
+      responses:
+        "200":
+          description: Updated user
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/admin/comments:
+    get:
+      tags: [admin]
+      summary: The moderation queue (ADMIN)
+      operationId: listCommentsByStatus
+      security: [{ bearer: [] }]
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string, enum: [held, visible, rejected], default: held }
+      responses:
+        "200":
+          description: Comments with that status, oldest first
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CommentList" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/v1/admin/comments/{id}/decision:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      tags: [admin]
+      summary: A human decision that overrides the AI (ADMIN)
+      operationId: decideComment
+      security: [{ bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decision]
+              properties:
+                decision: { type: string, enum: [approve, reject] }
+      responses:
+        "200":
+          description: "`approve` makes it visible, `reject` hides it"
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Comment" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    Slug:
+      name: slug
+      in: path
+      required: true
+      schema: { type: string, maxLength: 100 }
+    Id:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer, minimum: 1 }
+
+  responses:
+    ValidationError:
+      description: Invalid input (`validation-error`)
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+          example:
+            type: https://devblog.example/problems/validation-error
+            title: Validation failed
+            status: 400
+            detail: "title must be 1-200 characters"
+    Unauthorized:
+      description: "Missing, invalid or expired access token (`unauthorized`, with header WWW-Authenticate: Bearer)"
+      headers:
+        WWW-Authenticate: { schema: { type: string }, description: "Bearer" }
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    Forbidden:
+      description: Signed in, but not allowed (`forbidden`)
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    NotFound:
+      description: No such resource, or not visible to you (`not-found`)
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+
+  schemas:
+    Problem:
+      type: object
+      description: RFC 9457 problem details
+      required: [type, title, status]
+      properties:
+        type: { type: string, format: uri, examples: ["https://devblog.example/problems/not-found"] }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+
+    Health:
+      type: object
+      required: [status, checks]
+      properties:
+        status: { type: string, enum: [UP, DOWN] }
+        checks:
+          type: object
+          required: [database]
+          properties:
+            database: { type: string, enum: [UP, DOWN] }
+
+    Role:
+      type: string
+      enum: [READER, AUTHOR, ADMIN]
+
+    RegisterRequest:
+      type: object
+      required: [email, password, displayName]
+      properties:
+        email: { type: string, format: email, maxLength: 254, description: "Stored lower-case" }
+        password: { type: string, minLength: 8, description: "8 characters to 72 bytes (bcrypt's limit)" }
+        displayName: { type: string, minLength: 1, maxLength: 50 }
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string }
+        password: { type: string }
+
+    RefreshRequest:
+      type: object
+      required: [refreshToken]
+      properties:
+        refreshToken: { type: string }
+
+    ChangeRoleRequest:
+      type: object
+      required: [role]
+      properties:
+        role: { $ref: "#/components/schemas/Role" }
+
+    User:
+      type: object
+      required: [id, email, displayName, role, createdAt]
+      properties:
+        id: { type: integer }
+        email: { type: string }
+        displayName: { type: string }
+        role: { $ref: "#/components/schemas/Role" }
+        createdAt: { type: string, format: date-time }
+
+    AuthorRef:
+      type: object
+      description: The public view of a user (never the e-mail address)
+      required: [id, displayName]
+      properties:
+        id: { type: integer }
+        displayName: { type: string }
+
+    TokenPair:
+      type: object
+      required: [accessToken, refreshToken, tokenType, expiresIn, user]
+      properties:
+        accessToken: { type: string, description: "JWT (HS256): sub = user id, role, iss = devblog, iat, exp" }
+        refreshToken: { type: string, description: "Opaque, single use, valid 7 days" }
+        tokenType: { type: string, const: Bearer }
+        expiresIn: { type: integer, const: 900, description: "Seconds until the access token expires" }
+        user: { $ref: "#/components/schemas/User" }
+
+    Tags:
+      type: array
+      maxItems: 5
+      uniqueItems: true
+      description: Lower-cased, de-duplicated and returned sorted
+      items: { type: string, pattern: "^[a-z0-9]+(-[a-z0-9]+)*$", maxLength: 30 }
+
+    CreatePostRequest:
+      type: object
+      required: [title, body]
+      properties:
+        title: { type: string, minLength: 1, maxLength: 200 }
+        body: { type: string, minLength: 1, maxLength: 50000, description: "Markdown, stored as-is" }
+        tags: { $ref: "#/components/schemas/Tags" }
+        status: { type: string, enum: [draft, published], default: draft }
+
+    UpdatePostRequest:
+      type: object
+      required: [version]
+      minProperties: 2
+      description: "`version` plus at least one field to change"
+      properties:
+        version: { type: integer, minimum: 1 }
+        title: { type: string, minLength: 1, maxLength: 200 }
+        body: { type: string, minLength: 1, maxLength: 50000 }
+        tags: { $ref: "#/components/schemas/Tags" }
+        status: { type: string, enum: [draft, published] }
+
+    Post:
+      type: object
+      required: [id, slug, title, body, status, tags, author, createdAt, updatedAt, publishedAt, version]
+      properties:
+        id: { type: integer }
+        slug: { type: string }
+        title: { type: string }
+        body: { type: string }
+        status: { type: string, enum: [draft, published] }
+        tags: { $ref: "#/components/schemas/Tags" }
+        author: { $ref: "#/components/schemas/AuthorRef" }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        publishedAt: { type: [string, "null"], format: date-time, description: "Set the first time the post is published" }
+        version: { type: integer }
+
+    PostListItem:
+      type: object
+      required: [id, slug, title, excerpt, tags, author, publishedAt]
+      properties:
+        id: { type: integer }
+        slug: { type: string }
+        title: { type: string }
+        excerpt: { type: string, description: "Whitespace collapsed; at most 160 characters (157 + '...')" }
+        tags: { $ref: "#/components/schemas/Tags" }
+        author: { $ref: "#/components/schemas/AuthorRef" }
+        publishedAt: { type: string, format: date-time }
+
+    PostPage:
+      type: object
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/PostListItem" }
+        nextCursor: { type: [string, "null"], description: "Pass as ?cursor= for the next page; null on the last page" }
+
+    PostSummaryResult:
+      type: object
+      required: [slug, provider, fallback, summary, generatedAt]
+      properties:
+        slug: { type: string }
+        provider: { type: string, enum: [template, llm] }
+        fallback: { type: boolean, description: "true when the LLM was configured but failed and the template answered" }
+        summary: { type: string, maxLength: 280 }
+        generatedAt: { type: string, format: date-time }
+
+    TagList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            required: [name, posts]
+            properties:
+              name: { type: string }
+              posts: { type: integer }
+
+    CreateCommentRequest:
+      type: object
+      required: [body]
+      properties:
+        body: { type: string, minLength: 1, maxLength: 2000 }
+        parentId: { type: [integer, "null"], description: "Reply to a top-level visible comment of the same post (one level deep)" }
+
+    Moderation:
+      type: object
+      required: [label, confidence, provider, fallback, reason]
+      properties:
+        label: { type: string, enum: [ok, spam, toxic] }
+        confidence: { type: number, minimum: 0, maximum: 1 }
+        provider: { type: string, enum: [rules, llm] }
+        fallback: { type: boolean }
+        reason: { type: string, maxLength: 200 }
+
+    Comment:
+      type: object
+      required: [id, postSlug, parentId, author, body, status, moderation, createdAt]
+      properties:
+        id: { type: integer }
+        postSlug: { type: string }
+        parentId: { type: [integer, "null"] }
+        author: { $ref: "#/components/schemas/AuthorRef" }
+        body: { type: string }
+        status: { type: string, enum: [visible, held, rejected] }
+        moderation: { $ref: "#/components/schemas/Moderation" }
+        createdAt: { type: string, format: date-time }
+
+    CommentList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Comment" }

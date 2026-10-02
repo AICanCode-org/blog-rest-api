@@ -1,0 +1,41 @@
+{
+  "cms_file": "blog-rest-api",
+  "slug": "blog-rest-api",
+  "title": "DevBlog: Secure Blog REST API with JWT, Roles and AI Moderation",
+  "tagline": "Build a secure, production-style blogging backend from requirements to monitoring, with AI as your pair programmer",
+  "description": "Over nine phases you build DevBlog like a professional team: requirements, design, a test-first implementation of JWT auth with refresh-token rotation, role-based access, posts with optimistic locking, keyset pagination and full-text search, comments with AI moderation and a human in the loop, CI/CD with GitHub Actions, Docker, optional free-tier deployment, observability and a retrospective. Pick Java, Python or TypeScript; the spec, database and tests are shared. Everything runs on your laptop, and the AI features work offline.",
+  "difficulty": "beginner",
+  "tech_stack": ["PostgreSQL", "JWT", "bcrypt", "Docker", "GitHub Actions", "OpenAPI"],
+  "tracks": [
+    {"id": "java", "label": "Java", "tech_stack": ["Java 21", "Spring Boot", "JDBC", "Nimbus JOSE + JWT", "JUnit 5", "JaCoCo"], "folder": "tracks/java"},
+    {"id": "python", "label": "Python", "tech_stack": ["Python 3.11+", "FastAPI", "psycopg 3", "PyJWT", "bcrypt", "pytest"], "folder": "tracks/python"},
+    {"id": "typescript", "label": "TypeScript", "tech_stack": ["Node.js 20+", "TypeScript", "Fastify", "pg", "jose", "Vitest"], "folder": "tracks/typescript"}
+  ],
+  "prerequisites": [
+    {"title": "Git and the command line basics", "url": null},
+    {"title": "One of: Java, Python or TypeScript fundamentals", "url": null},
+    {"title": "What HTTP methods and status codes are", "url": null}
+  ],
+  "outcomes": [
+    "Turn a brief into testable requirements, user stories and a threat list",
+    "Design a REST API contract-first (OpenAPI) with a PostgreSQL schema and ADRs",
+    "Implement authentication properly: bcrypt, short-lived JWTs, rotating refresh tokens with reuse detection",
+    "Enforce roles and ownership, optimistic locking, keyset pagination and full-text search",
+    "Add AI comment moderation that only holds comments for a human and falls back offline",
+    "Build CI/CD with GitHub Actions: matrix, caching, reusable workflows, service containers, GHCR",
+    "Add request IDs, JSON logs, metrics and a circuit breaker after a game day and a blameless post-mortem",
+    "Use AI assistants deliberately and verify every output"
+  ],
+  "ai_feature": "AI comment moderation (hold for a human) and post TL;DR summaries: offline rules/template by default, optional Ollama or a free Gemini/Groq key",
+  "requires_paid_services": false,
+  "access": {"default": "pro", "plans": ["pro", "elite", "campus"], "free_phases": [0]},
+  "repo": {
+    "url": "https://github.com/AICanCode-org/blog-rest-api",
+    "starter_ref": "main",
+    "solution_ref": "solution",
+    "phase_tags": ["phase-0-end", "phase-1-end", "phase-2-end", "phase-3-end", "phase-4-end", "phase-5-end", "phase-6-end", "phase-7-end", "phase-8-end"],
+    "releases": ["v1.0.0", "v1.1.0"]
+  },
+  "live_demo_url": null,
+  "portfolio_blurb": "Built DevBlog, a secure blog REST API: bcrypt + short-lived JWTs with rotating refresh tokens and reuse detection, role- and ownership-based access, optimistic locking, keyset pagination, PostgreSQL full-text search, AI comment moderation with an offline fallback and a human review queue, >=85 % test coverage, GitHub Actions CI/CD to GHCR, Docker, JSON logs, metrics and a circuit breaker added after a game day."
+}
